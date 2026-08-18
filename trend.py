@@ -58,18 +58,25 @@ def days_between_dt(a: datetime, b: datetime) -> float:
 def time_alpha(dt_days: float, half_life_days: float) -> Tuple[float, float]:
     """Return (alpha, decay) for a gap of dt_days given half-life H.
 
-    Very small gaps (< ~1 minute) treated as re-weigh: alpha=1.
+    Tiny gaps are handled by coalescing duplicate samples before EMA — do not
+    use alpha=1 here (that used to snap the trend to raw weight on spam posts).
     """
     if half_life_days <= 0:
         raise ValueError("half_life_days must be > 0")
-    if dt_days <= (1.0 / 1440.0):  # <= 1 minute
-        return 1.0, 0.0
+    if dt_days <= 0:
+        # Identical timestamp after coalesce shouldn't happen; keep previous.
+        return 0.0, 1.0
     decay = math.pow(0.5, dt_days / half_life_days)
     if decay < 1e-12:
         decay = 0.0
     if decay > 1.0:
         decay = 1.0
     return 1.0 - decay, decay
+
+
+# Collapse auto-log spam / same-session repeats before smoothing.
+_COALESCE_WINDOW_DAYS = 2.0 / 1440.0  # 2 minutes
+_COALESCE_WEIGHT_LB = 0.15
 
 
 @dataclass
@@ -138,12 +145,33 @@ def compute_trend(
     if not pts:
         return []
 
+    # Coalesce reconnect spam: within 2 minutes + ~same weight → one EMA update.
+    # Map every sample id → the anchor id that owns the EMA step.
+    anchors: List[Point] = []
+    sample_to_anchor: dict = {}  # sample id -> anchor Point
+    for p in pts:
+        if anchors:
+            prev = anchors[-1]
+            dt = days_between_dt(prev.logged_at, p.logged_at)
+            same_w = abs(p.weight - prev.weight) <= _COALESCE_WEIGHT_LB
+            if dt <= _COALESCE_WINDOW_DAYS and same_w:
+                if prev.body_fat is None and p.body_fat is not None:
+                    prev.body_fat = p.body_fat
+                if p.id is not None:
+                    sample_to_anchor[p.id] = prev
+                continue
+        anchors.append(p)
+        if p.id is not None:
+            sample_to_anchor[p.id] = p
+
+    # Run EMA on anchors only
     prev_trend: Optional[float] = None
     prev_bf_trend: Optional[float] = None
     prev_at: Optional[datetime] = None
     prev_rate: Optional[float] = None
+    ema: dict = {}  # anchor id -> filled Point fields
 
-    for p in pts:
+    for p in anchors:
         if prev_trend is None or prev_at is None:
             p.trend = p.weight
             p.body_fat_trend = p.body_fat
@@ -152,44 +180,60 @@ def compute_trend(
             p.rate_lb_per_day = 0.0
             p.rate_lb_per_week = 0.0
             p.kcal_per_day = 0.0
-            prev_trend = p.trend
-            prev_bf_trend = p.body_fat_trend
-            prev_at = p.logged_at
-            prev_rate = 0.0
-            continue
+        else:
+            dt = days_between_dt(prev_at, p.logged_at)
+            alpha, decay = time_alpha(dt, half_life_days)
+            trend = alpha * p.weight + decay * prev_trend
+            p.trend = trend
+            p.gap_days = round(dt, 4)
+            p.alpha = alpha
 
-        dt = days_between_dt(prev_at, p.logged_at)
-        alpha, decay = time_alpha(dt, half_life_days)
-        trend = alpha * p.weight + decay * prev_trend
-        p.trend = trend
-        p.gap_days = round(dt, 4)
-        p.alpha = alpha
-
-        if p.body_fat is not None:
-            if prev_bf_trend is None:
-                p.body_fat_trend = p.body_fat
+            if p.body_fat is not None:
+                if prev_bf_trend is None:
+                    p.body_fat_trend = p.body_fat
+                else:
+                    p.body_fat_trend = alpha * p.body_fat + decay * prev_bf_trend
             else:
-                p.body_fat_trend = alpha * p.body_fat + decay * prev_bf_trend
-        else:
-            # carry forward smoothed BF when this sample has no reading
-            p.body_fat_trend = prev_bf_trend
+                p.body_fat_trend = prev_bf_trend
 
-        if dt > (1.0 / 1440.0):
-            inst_rate = (trend - prev_trend) / dt
-            r_alpha, r_decay = time_alpha(dt, half_life_days)
-            rate = inst_rate if prev_rate is None else (r_alpha * inst_rate + r_decay * prev_rate)
-        else:
-            rate = prev_rate if prev_rate is not None else 0.0
+            if dt > (1.0 / 1440.0):
+                inst_rate = (trend - prev_trend) / dt
+                r_alpha, r_decay = time_alpha(dt, half_life_days)
+                rate = (
+                    inst_rate
+                    if prev_rate is None
+                    else (r_alpha * inst_rate + r_decay * prev_rate)
+                )
+            else:
+                rate = prev_rate if prev_rate is not None else 0.0
 
-        p.rate_lb_per_day = rate
-        p.rate_lb_per_week = rate * 7.0
-        p.kcal_per_day = rate * KCAL_PER_LB
+            p.rate_lb_per_day = rate
+            p.rate_lb_per_week = rate * 7.0
+            p.kcal_per_day = rate * KCAL_PER_LB
 
-        prev_trend = trend
+        prev_trend = p.trend
         if p.body_fat_trend is not None:
             prev_bf_trend = p.body_fat_trend
         prev_at = p.logged_at
-        prev_rate = rate
+        prev_rate = p.rate_lb_per_day
+        if p.id is not None:
+            ema[p.id] = p
+
+    # Copy EMA onto every sample (duplicates inherit their anchor's state)
+    for p in pts:
+        anchor = sample_to_anchor.get(p.id) if p.id is not None else None
+        if anchor is None:
+            continue
+        src = ema.get(anchor.id, anchor)
+        p.trend = src.trend
+        p.body_fat_trend = src.body_fat_trend
+        p.rate_lb_per_day = src.rate_lb_per_day
+        p.rate_lb_per_week = src.rate_lb_per_week
+        p.kcal_per_day = src.kcal_per_day
+        if src is p:
+            continue  # already filled as anchor
+        p.gap_days = 0.0
+        p.alpha = 0.0  # marks coalesced duplicate in UI/history
 
     return pts
 
