@@ -295,17 +295,41 @@ main {
 #photo-dialog::backdrop { background: rgba(0, 0, 0, 0.65); }
 .photo-dialog-body {
   display: grid;
-  grid-template-columns: 1.1fr 1fr;
+  grid-template-columns: 1.25fr 1fr;
   gap: 0;
   max-height: 90vh;
 }
 @media (max-width: 720px) {
   .photo-dialog-body { grid-template-columns: 1fr; }
 }
-.photo-dialog-body > img {
-  width: 100%;
-  height: 100%;
+.pd-images {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
+  background: #05070c;
   max-height: 90vh;
+  overflow: auto;
+}
+.pd-images.has-projection {
+  grid-template-columns: 1fr 1fr;
+}
+.pd-images figure {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.pd-images figcaption {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 8px 10px 0;
+}
+.pd-images img {
+  width: 100%;
+  max-height: calc(90vh - 28px);
   object-fit: contain;
   background: #05070c;
 }

@@ -7,7 +7,8 @@
   let photoSeries = [];
   let visualChart = null;
   let activePhotoId = null;
-  let scaleBmiPoint = null;
+  let weightSeries = []; // [{date, weight|trend}]
+  let heightIn = null;
 
   function fmt(n, d = 1) {
     if (n == null || Number.isNaN(n)) return "—";
@@ -54,9 +55,28 @@
     }
   }
 
+  function bmiFromLbIn(lb, inches) {
+    if (lb == null || inches == null || !(inches > 0) || !(lb > 0)) return null;
+    return (703 * Number(lb)) / (Number(inches) * Number(inches));
+  }
+
+  /** Scale BMI at each weigh-in we have (trend preferred, else raw). */
+  function scaleBmiPoints() {
+    if (!heightIn || !weightSeries.length) return [];
+    const out = [];
+    for (const e of weightSeries) {
+      const lb = e.trend != null ? e.trend : e.weight;
+      const bmi = bmiFromLbIn(lb, heightIn);
+      if (bmi == null || !e.date) continue;
+      out.push({ x: e.date, y: Math.round(bmi * 10) / 10 });
+    }
+    return out;
+  }
+
   window.hackDietPhotos = {
-    setScaleBmi(bmi) {
-      scaleBmiPoint = bmi;
+    setScaleContext({ series, height_in }) {
+      if (series) weightSeries = series;
+      if (height_in !== undefined) heightIn = height_in;
       renderVisualChart();
     },
     setPhotoSeries(series) {
@@ -148,22 +168,19 @@
       },
     ];
 
-    if (scaleBmiPoint != null && photoSeries.length) {
+    const scalePts = scaleBmiPoints();
+    if (scalePts.length) {
       datasets.push({
-        label: "Scale BMI (now)",
-        data: [
-          { x: photoSeries[0].date, y: scaleBmiPoint },
-          {
-            x: photoSeries[photoSeries.length - 1].date,
-            y: scaleBmiPoint,
-          },
-        ],
+        label: "Scale BMI",
+        data: scalePts,
         yAxisID: "yBmi",
-        borderColor: "rgba(125, 211, 160, 0.7)",
-        borderDash: [6, 4],
-        pointRadius: 0,
-        borderWidth: 1.5,
+        borderColor: "rgba(125, 211, 160, 0.9)",
+        backgroundColor: "rgba(125, 211, 160, 0.9)",
         showLine: true,
+        tension: 0.15,
+        pointRadius: 4,
+        pointHoverRadius: 6,
+        borderWidth: 2,
       });
     }
 
@@ -215,6 +232,30 @@
     });
   }
 
+  function showProjection(p) {
+    const wrap = $("#pd-proj-wrap");
+    const imgs = document.querySelector(".pd-images");
+    const msg = $("#pd-proj-msg");
+    if (p?.has_projection && p.projection_url) {
+      $("#pd-proj-img").src = p.projection_url + "?t=" + Date.now();
+      const g = p.projection_goal_lb != null ? fmt(p.projection_goal_lb, 0) : "?";
+      $("#pd-proj-caption").textContent = `At goal (~${g} lb)`;
+      wrap.hidden = false;
+      imgs?.classList.add("has-projection");
+      if (msg) {
+        msg.textContent = p.projection_model
+          ? `Imagine · ${p.projection_model}`
+          : "Goal projection ready";
+        msg.className = "hint ok";
+        msg.hidden = false;
+      }
+    } else {
+      wrap.hidden = true;
+      imgs?.classList.remove("has-projection");
+      if (msg) msg.hidden = true;
+    }
+  }
+
   function openPhoto(id) {
     const p = photos.find((x) => x.id === id);
     if (!p) return;
@@ -243,6 +284,7 @@
     ]
       .filter(Boolean)
       .join("\n");
+    showProjection(p);
     $("#photo-dialog").showModal();
   }
 
@@ -292,6 +334,47 @@
     } finally {
       btn.disabled = false;
       btn.textContent = "Re-analyze";
+    }
+  });
+
+  $("#pd-project")?.addEventListener("click", async () => {
+    if (!activePhotoId) return;
+    const btn = $("#pd-project");
+    const msg = $("#pd-proj-msg");
+    btn.disabled = true;
+    const prev = btn.textContent;
+    btn.textContent = "Imagining…";
+    if (msg) {
+      msg.textContent = "Grok Imagine is editing this photo toward your goal weight…";
+      msg.className = "hint";
+      msg.hidden = false;
+    }
+    try {
+      const data = await api(`/api/photos/${activePhotoId}/project-goal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      photos = data.photos || photos;
+      // merge returned photo
+      if (data.photo) {
+        const i = photos.findIndex((x) => x.id === data.photo.id);
+        if (i >= 0) photos[i] = data.photo;
+        else photos.push(data.photo);
+      }
+      openPhoto(activePhotoId);
+      renderGallery();
+    } catch (e) {
+      if (msg) {
+        msg.textContent = e.message;
+        msg.className = "hint err";
+        msg.hidden = false;
+      } else {
+        alert(e.message);
+      }
+    } finally {
+      btn.disabled = false;
+      btn.textContent = prev;
     }
   });
 

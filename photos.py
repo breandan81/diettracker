@@ -34,12 +34,31 @@ def ensure_photos_schema(conn: sqlite3.Connection) -> None:
             appearance_justification TEXT,
             confidence_overall TEXT,
             model TEXT,
+            projection_filename TEXT,
+            projection_mime TEXT,
+            projection_prompt TEXT,
+            projection_model TEXT,
+            projection_goal_lb REAL,
+            projection_created_at TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_photos_date ON photos(date);
         """
     )
+    # migrate older DBs
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(photos)").fetchall()}
+    migrations = {
+        "projection_filename": "TEXT",
+        "projection_mime": "TEXT",
+        "projection_prompt": "TEXT",
+        "projection_model": "TEXT",
+        "projection_goal_lb": "REAL",
+        "projection_created_at": "TEXT",
+    }
+    for col, typ in migrations.items():
+        if col not in cols:
+            conn.execute(f"ALTER TABLE photos ADD COLUMN {col} {typ}")
     conn.commit()
 
 
@@ -60,6 +79,10 @@ def row_to_dict(row: sqlite3.Row, include_analysis: bool = True) -> dict:
         d["analysis"] = None
     d.pop("analysis_json", None)
     d["image_url"] = f"/api/photos/{d['id']}/image"
+    d["has_projection"] = bool(d.get("projection_filename"))
+    d["projection_url"] = (
+        f"/api/photos/{d['id']}/projection" if d.get("projection_filename") else None
+    )
     return d
 
 
@@ -218,17 +241,6 @@ def reanalyze_photo(conn: sqlite3.Connection, data_dir: Path, pid: int, now_iso:
     return get_photo(conn, pid)  # type: ignore[return-value]
 
 
-def delete_photo(conn: sqlite3.Connection, data_dir: Path, pid: int) -> None:
-    row = conn.execute("SELECT filename FROM photos WHERE id = ?", (pid,)).fetchone()
-    if not row:
-        raise KeyError("not found")
-    conn.execute("DELETE FROM photos WHERE id = ?", (pid,))
-    conn.commit()
-    path = photos_dir(data_dir) / row["filename"]
-    if path.is_file():
-        path.unlink()
-
-
 def photo_file_path(conn: sqlite3.Connection, data_dir: Path, pid: int) -> tuple[Path, str]:
     row = conn.execute(
         "SELECT filename, mime FROM photos WHERE id = ?", (pid,)
@@ -239,6 +251,120 @@ def photo_file_path(conn: sqlite3.Connection, data_dir: Path, pid: int) -> tuple
     if not path.is_file():
         raise FileNotFoundError(row["filename"])
     return path, row["mime"]
+
+
+def projection_file_path(
+    conn: sqlite3.Connection, data_dir: Path, pid: int
+) -> tuple[Path, str]:
+    row = conn.execute(
+        "SELECT projection_filename, projection_mime FROM photos WHERE id = ?",
+        (pid,),
+    ).fetchone()
+    if not row or not row["projection_filename"]:
+        raise KeyError("no projection")
+    path = photos_dir(data_dir) / row["projection_filename"]
+    if not path.is_file():
+        raise FileNotFoundError(row["projection_filename"])
+    return path, row["projection_mime"] or "image/jpeg"
+
+
+def save_goal_projection(
+    conn: sqlite3.Connection,
+    data_dir: Path,
+    pid: int,
+    *,
+    goal_lb: float,
+    current_lb: Optional[float],
+    current_bmi: Optional[float],
+    goal_bmi: Optional[float],
+    now_iso: str,
+) -> dict:
+    """Run Imagine edit and store projection next to the source photo."""
+    from imagine import edit_image_to_goal
+
+    row = conn.execute("SELECT * FROM photos WHERE id = ?", (pid,)).fetchone()
+    if not row:
+        raise KeyError("not found")
+    src = photos_dir(data_dir) / row["filename"]
+    if not src.is_file():
+        raise FileNotFoundError(row["filename"])
+
+    notes = None
+    if row["analysis_json"]:
+        try:
+            analysis = json.loads(row["analysis_json"])
+            obs = analysis.get("observations") or {}
+            bits = [
+                obs.get("overall_build"),
+                obs.get("midsection"),
+                analysis.get("appearance_rating", {}).get("justification"),
+            ]
+            notes = "; ".join(b for b in bits if b)
+        except Exception:
+            notes = None
+
+    result = edit_image_to_goal(
+        src.read_bytes(),
+        row["mime"] or "image/jpeg",
+        current_lb=current_lb,
+        goal_lb=goal_lb,
+        current_bmi=current_bmi,
+        goal_bmi=goal_bmi,
+        appearance_notes=notes,
+    )
+
+    # remove prior projection file if any
+    if row["projection_filename"]:
+        old = photos_dir(data_dir) / row["projection_filename"]
+        if old.is_file():
+            old.unlink()
+
+    suffix = ".png" if "png" in (result["mime"] or "") else ".jpg"
+    fname = f"{row['date']}_{pid}_goal{suffix}"
+    out_path = photos_dir(data_dir) / fname
+    out_path.write_bytes(result["bytes"])
+
+    conn.execute(
+        """
+        UPDATE photos SET
+            projection_filename=?,
+            projection_mime=?,
+            projection_prompt=?,
+            projection_model=?,
+            projection_goal_lb=?,
+            projection_created_at=?,
+            updated_at=?
+        WHERE id=?
+        """,
+        (
+            fname,
+            result["mime"],
+            result["prompt"],
+            result["model"],
+            goal_lb,
+            now_iso,
+            now_iso,
+            pid,
+        ),
+    )
+    conn.commit()
+    return get_photo(conn, pid)  # type: ignore[return-value]
+
+
+def delete_photo(conn: sqlite3.Connection, data_dir: Path, pid: int) -> None:
+    row = conn.execute(
+        "SELECT filename, projection_filename FROM photos WHERE id = ?", (pid,)
+    ).fetchone()
+    if not row:
+        raise KeyError("not found")
+    conn.execute("DELETE FROM photos WHERE id = ?", (pid,))
+    conn.commit()
+    for key in ("filename", "projection_filename"):
+        name = row[key]
+        if name:
+            path = photos_dir(data_dir) / name
+            if path.is_file():
+                path.unlink()
 
 
 def parse_multipart(handler) -> dict:

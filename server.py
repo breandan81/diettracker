@@ -23,7 +23,9 @@ from photos import (
     list_photos,
     parse_multipart,
     photo_file_path,
+    projection_file_path,
     reanalyze_photo,
+    save_goal_projection,
     series_for_chart,
 )
 from trend import (
@@ -324,6 +326,10 @@ class Handler(SimpleHTTPRequestHandler):
             if m:
                 return self._serve_photo_image(int(m.group(1)))
 
+            m = re.fullmatch(r"/api/photos/(\d+)/projection", path)
+            if m:
+                return self._serve_projection_image(int(m.group(1)))
+
             m = re.fullmatch(r"/api/photos/(\d+)", path)
             if m:
                 photo = get_photo(DB, int(m.group(1)))
@@ -375,6 +381,17 @@ class Handler(SimpleHTTPRequestHandler):
             m = re.fullmatch(r"/api/photos/(\d+)/analyze", parsed.path)
             if m:
                 return self._reanalyze_photo(int(m.group(1)))
+            m = re.fullmatch(r"/api/photos/(\d+)/project-goal", parsed.path)
+            if m:
+                data = {}
+                # optional JSON body with goal override
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    if length:
+                        data = read_json(self)
+                except Exception:
+                    data = {}
+                return self._project_goal(int(m.group(1)), data or {})
             return self._err(404, "not found")
         except Exception as e:
             traceback.print_exc()
@@ -513,13 +530,7 @@ class Handler(SimpleHTTPRequestHandler):
             },
         )
 
-    def _serve_photo_image(self, pid: int) -> None:
-        try:
-            path, mime = photo_file_path(DB, DATA_DIR, pid)
-        except KeyError:
-            return self._err(404, "not found")
-        except FileNotFoundError:
-            return self._err(404, "image missing on disk")
+    def _serve_binary_image(self, path: Path, mime: str) -> None:
         data = path.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", mime)
@@ -528,6 +539,77 @@ class Handler(SimpleHTTPRequestHandler):
         self._cors()
         self.end_headers()
         self.wfile.write(data)
+
+    def _serve_photo_image(self, pid: int) -> None:
+        try:
+            path, mime = photo_file_path(DB, DATA_DIR, pid)
+        except KeyError:
+            return self._err(404, "not found")
+        except FileNotFoundError:
+            return self._err(404, "image missing on disk")
+        return self._serve_binary_image(path, mime)
+
+    def _serve_projection_image(self, pid: int) -> None:
+        try:
+            path, mime = projection_file_path(DB, DATA_DIR, pid)
+        except KeyError:
+            return self._err(404, "no projection yet")
+        except FileNotFoundError:
+            return self._err(404, "projection missing on disk")
+        return self._serve_binary_image(path, mime)
+
+    def _project_goal(self, pid: int, data: dict) -> None:
+        settings = all_settings()
+        goal = data.get("goal_weight", settings.get("goal_weight"))
+        try:
+            goal_lb = float(goal) if goal not in (None, "") else None
+        except (TypeError, ValueError):
+            return self._err(400, "goal_weight must be a number")
+        if goal_lb is None:
+            return self._err(400, "set a goal weight in Settings first")
+
+        series, summ, half = load_trend()
+        summ = attach_bmi({**summ, "half_life_days": half}, settings)
+        current_lb = summ.get("trend") or summ.get("latest_weight")
+        current_bmi = (summ.get("bmi") or {}).get("bmi")
+        height_in = settings.get("height_in")
+        goal_bmi = None
+        if height_in and goal_lb:
+            try:
+                goal_bmi = round(
+                    (703.0 * float(goal_lb)) / (float(height_in) ** 2), 1
+                )
+            except Exception:
+                goal_bmi = None
+
+        try:
+            photo = save_goal_projection(
+                DB,
+                DATA_DIR,
+                pid,
+                goal_lb=goal_lb,
+                current_lb=float(current_lb) if current_lb is not None else None,
+                current_bmi=float(current_bmi) if current_bmi is not None else None,
+                goal_bmi=goal_bmi,
+                now_iso=utc_now_iso(),
+            )
+        except KeyError:
+            return self._err(404, "not found")
+        except FileNotFoundError:
+            return self._err(404, "image missing on disk")
+        except Exception as e:
+            traceback.print_exc()
+            return self._err(502, str(e))
+
+        return self._json(
+            200,
+            {
+                "photo": photo,
+                "photos": list_photos(DB),
+                "goal_lb": goal_lb,
+                "goal_bmi": goal_bmi,
+            },
+        )
 
     def _create_photo(self) -> None:
         ctype = self.headers.get("Content-Type", "")

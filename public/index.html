@@ -9,7 +9,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-  <link rel="stylesheet" href="/style.css?v=6" />
+  <link rel="stylesheet" href="/style.css?v=9" />
 </head>
 <body class="mood-idle" id="body-mood">
   <div id="fx-layer" aria-hidden="true"></div>
@@ -193,7 +193,7 @@
       <div class="chart-wrap">
         <canvas id="chart-visual" height="120"></canvas>
       </div>
-      <p class="hint">Grok appearance score (1–10) and visual BMI estimate from progress photos — vs scale BMI when height is set. Upload in the <button type="button" class="linkish jump-photos">Photos</button> view.</p>
+      <p class="hint">Grok appearance (1–10) and visual BMI from photos, plus <strong>Scale BMI</strong> at each weigh-in (needs height in settings). Upload in the <button type="button" class="linkish jump-photos">Photos</button> view.</p>
     </section>
 
     <section class="two-col">
@@ -308,7 +308,16 @@
 
   <dialog id="photo-dialog">
     <div class="photo-dialog-body">
-      <img id="pd-img" alt="progress photo" />
+      <div class="pd-images">
+        <figure>
+          <figcaption>Now</figcaption>
+          <img id="pd-img" alt="progress photo" />
+        </figure>
+        <figure id="pd-proj-wrap" hidden>
+          <figcaption id="pd-proj-caption">At goal</figcaption>
+          <img id="pd-proj-img" alt="goal weight projection" />
+        </figure>
+      </div>
       <div class="photo-dialog-meta">
         <h3 id="pd-title">Photo</h3>
         <div class="pd-scores">
@@ -318,9 +327,13 @@
         </div>
         <p id="pd-just" class="pd-just"></p>
         <pre id="pd-obs" class="pd-obs"></pre>
+        <p class="hint" id="pd-proj-msg" hidden></p>
         <div class="dialog-actions">
           <button type="button" class="btn danger" id="pd-delete">Delete</button>
           <button type="button" class="btn ghost" id="pd-reanalyze">Re-analyze</button>
+          <button type="button" class="btn primary" id="pd-project" title="Grok Imagine: preview at goal weight">
+            Preview at goal
+          </button>
           <span class="grow"></span>
           <button type="button" class="btn" id="pd-close">Close</button>
         </div>
@@ -353,7 +366,7 @@
     </form>
   </dialog>
 
-  <script src="/app.js?v=6"></script>
-  <script src="/photos-ui.js?v=6"></script>
+  <script src="/app.js?v=9"></script>
+  <script src="/photos-ui.js?v=9"></script>
 </body>
 </html>

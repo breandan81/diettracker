@@ -90,8 +90,10 @@
     summary = trend.summary || {};
     if (window.hackDietPhotos) {
       if (trend.photo_series) window.hackDietPhotos.setPhotoSeries(trend.photo_series);
-      const bmi = summary.bmi?.bmi;
-      if (bmi != null) window.hackDietPhotos.setScaleBmi(bmi);
+      window.hackDietPhotos.setScaleContext({
+        series: series,
+        height_in: settings.height_in ?? null,
+      });
     }
     render();
   }
@@ -718,13 +720,18 @@
       }
       if (bar) bar.hidden = false;
       if (marker) marker.style.left = bmiMarkerPct(bmi.bmi) + "%";
-      if (window.hackDietPhotos) window.hackDietPhotos.setScaleBmi(bmi.bmi);
     } else {
       bmiEl.textContent = "—";
       bmiEl.className = "stat-value";
       catEl.textContent = "set height in settings";
       rangeEl.textContent = "";
       if (bar) bar.hidden = true;
+    }
+    if (window.hackDietPhotos) {
+      window.hackDietPhotos.setScaleContext({
+        series,
+        height_in: settings.height_in ?? null,
+      });
     }
   }
 
