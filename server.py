@@ -33,6 +33,7 @@ from trend import (
     KCAL_PER_LB,
     compute_trend,
     parse_date,
+    parse_datetime,
     summary,
 )
 from vision import xai_status
@@ -74,8 +75,8 @@ def init_db(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS weights (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT NOT NULL,          -- YYYY-MM-DD
-            weight REAL NOT NULL,       -- pounds
+            date TEXT NOT NULL,
+            weight REAL NOT NULL,
             note TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -88,12 +89,27 @@ def init_db(conn: sqlite3.Connection) -> None:
         );
         """
     )
-    # defaults
+    # migrate older DBs (columns added after first create)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(weights)").fetchall()}
+    if "logged_at" not in cols:
+        conn.execute("ALTER TABLE weights ADD COLUMN logged_at TEXT")
+    if "body_fat" not in cols:
+        conn.execute("ALTER TABLE weights ADD COLUMN body_fat REAL")
+    conn.execute(
+        """
+        UPDATE weights
+        SET logged_at = date || 'T12:00:00+00:00'
+        WHERE logged_at IS NULL OR logged_at = ''
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_weights_logged_at ON weights(logged_at)"
+    )
     defaults = {
         "half_life_days": str(DEFAULT_HALF_LIFE_DAYS),
         "unit": "lb",
         "goal_weight": "",
-        "height_in": "",  # total inches; used for BMI
+        "height_in": "",
     }
     for k, v in defaults.items():
         conn.execute(
@@ -229,7 +245,11 @@ def attach_bmi(summ: dict, settings: Optional[dict] = None) -> dict:
 
 def fetch_weights() -> list:
     rows = DB.execute(
-        "SELECT id, date, weight, note, created_at, updated_at FROM weights ORDER BY date ASC, id ASC"
+        """
+        SELECT id, date, logged_at, weight, body_fat, note, created_at, updated_at
+        FROM weights
+        ORDER BY COALESCE(logged_at, date), id ASC
+        """
     ).fetchall()
     return [dict(r) for r in rows]
 
@@ -238,7 +258,12 @@ def load_trend(half_life: Optional[float] = None) -> tuple[list, dict, float]:
     if half_life is None:
         half_life = float(all_settings()["half_life_days"])
     rows = fetch_weights()
-    samples = [(r["id"], r["date"], r["weight"], r["note"]) for r in rows]
+    samples = []
+    for r in rows:
+        when = r.get("logged_at") or r.get("date")
+        samples.append(
+            (r["id"], when, r["weight"], r["note"], r.get("body_fat"))
+        )
     points = compute_trend(samples, half_life_days=half_life)
     return [p.to_dict() for p in points], summary(points), half_life
 
@@ -429,6 +454,18 @@ class Handler(SimpleHTTPRequestHandler):
 
     # --- mutations ---
 
+    def _parse_logged_at(self, data: dict) -> tuple[str, str]:
+        """Return (date_yyyy_mm_dd, logged_at_iso_utc)."""
+        raw = data.get("logged_at") or data.get("timestamp") or data.get("date")
+        if not raw:
+            dt = datetime.now(timezone.utc)
+        else:
+            try:
+                dt = parse_datetime(raw)
+            except ValueError:
+                raise ValueError("invalid logged_at/date")
+        return dt.date().isoformat(), dt.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+
     def _create_weight(self, data: dict) -> None:
         if "weight" not in data:
             return self._err(400, "weight required")
@@ -439,11 +476,19 @@ class Handler(SimpleHTTPRequestHandler):
         if weight <= 0 or weight > 1000:
             return self._err(400, "weight out of range")
 
-        d_raw = data.get("date") or date.today().isoformat()
         try:
-            d = parse_date(d_raw).isoformat()
-        except ValueError:
-            return self._err(400, "invalid date (use YYYY-MM-DD)")
+            d, logged_at = self._parse_logged_at(data)
+        except ValueError as e:
+            return self._err(400, str(e))
+
+        body_fat = None
+        if data.get("body_fat") is not None and data.get("body_fat") != "":
+            try:
+                body_fat = float(data["body_fat"])
+            except (TypeError, ValueError):
+                return self._err(400, "body_fat must be a number (percent)")
+            if body_fat < 0 or body_fat > 80:
+                return self._err(400, "body_fat out of range")
 
         note = data.get("note")
         if note is not None:
@@ -452,10 +497,10 @@ class Handler(SimpleHTTPRequestHandler):
         now = utc_now_iso()
         cur = DB.execute(
             """
-            INSERT INTO weights(date, weight, note, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO weights(date, logged_at, weight, body_fat, note, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (d, weight, note, now, now),
+            (d, logged_at, weight, body_fat, note, now, now),
         )
         DB.commit()
         rid = cur.lastrowid
@@ -477,7 +522,9 @@ class Handler(SimpleHTTPRequestHandler):
 
         weight = row["weight"]
         d = row["date"]
+        logged_at = row["logged_at"] or (d + "T12:00:00+00:00")
         note = row["note"]
+        body_fat = row["body_fat"] if "body_fat" in row.keys() else None
 
         if "weight" in data and data["weight"] is not None:
             try:
@@ -487,11 +534,20 @@ class Handler(SimpleHTTPRequestHandler):
             if weight <= 0 or weight > 1000:
                 return self._err(400, "weight out of range")
 
-        if "date" in data and data["date"]:
+        if data.get("logged_at") or data.get("timestamp") or data.get("date"):
             try:
-                d = parse_date(data["date"]).isoformat()
-            except ValueError:
-                return self._err(400, "invalid date")
+                d, logged_at = self._parse_logged_at(data)
+            except ValueError as e:
+                return self._err(400, str(e))
+
+        if "body_fat" in data:
+            if data["body_fat"] is None or data["body_fat"] == "":
+                body_fat = None
+            else:
+                try:
+                    body_fat = float(data["body_fat"])
+                except (TypeError, ValueError):
+                    return self._err(400, "body_fat must be a number")
 
         if "note" in data:
             note = data["note"]
@@ -500,8 +556,12 @@ class Handler(SimpleHTTPRequestHandler):
 
         now = utc_now_iso()
         DB.execute(
-            "UPDATE weights SET date=?, weight=?, note=?, updated_at=? WHERE id=?",
-            (d, weight, note, now, wid),
+            """
+            UPDATE weights
+            SET date=?, logged_at=?, weight=?, body_fat=?, note=?, updated_at=?
+            WHERE id=?
+            """,
+            (d, logged_at, weight, body_fat, note, now, wid),
         )
         DB.commit()
         series, summ, half = load_trend()

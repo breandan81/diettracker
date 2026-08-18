@@ -53,6 +53,45 @@
     return local.toISOString().slice(0, 10);
   }
 
+  /** datetime-local value in local timezone */
+  function nowLocalInput() {
+    const d = new Date();
+    const off = d.getTimezoneOffset();
+    return new Date(d.getTime() - off * 60000).toISOString().slice(0, 16);
+  }
+
+  function toLocalInput(iso) {
+    if (!iso) return nowLocalInput();
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) {
+      // date-only
+      return String(iso).slice(0, 10) + "T12:00";
+    }
+    const off = d.getTimezoneOffset();
+    return new Date(d.getTime() - off * 60000).toISOString().slice(0, 16);
+  }
+
+  function fromLocalInput(val) {
+    // treat as local wall time → ISO with offset
+    if (!val) return null;
+    const d = new Date(val);
+    return d.toISOString();
+  }
+
+  function formatWhen(e) {
+    const iso = e.logged_at || e.date;
+    if (!iso) return "—";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return String(iso).slice(0, 16);
+    return d.toLocaleString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+
   function daysBetweenISO(a, b) {
     const da = new Date(a + "T12:00:00");
     const db = new Date(b + "T12:00:00");
@@ -678,8 +717,24 @@
       s.trend != null ? `${fmt(s.trend, 1)} lb` : "—";
     $("#s-raw").textContent =
       s.latest_weight != null
-        ? `last weigh-in ${fmt(s.latest_weight, 1)} lb · ${s.latest_date || ""} · ${s.count || 0} logs`
+        ? `last ${fmt(s.latest_weight, 1)} lb · ${formatWhen({ logged_at: s.latest_logged_at, date: s.latest_date })} · ${s.count || 0} logs`
         : "no weigh-ins yet";
+
+    const bfEl = $("#s-bf");
+    const bfSub = $("#s-bf-sub");
+    if (bfEl) {
+      const bf = s.body_fat_trend != null ? s.body_fat_trend : s.latest_body_fat;
+      if (bf != null) {
+        bfEl.textContent = `${fmt(bf, 1)}%`;
+        bfSub.textContent =
+          s.body_fat_trend != null && s.latest_body_fat != null
+            ? `trend · last ${fmt(s.latest_body_fat, 1)}%`
+            : "EMA when scale sends BF";
+      } else {
+        bfEl.textContent = "—";
+        bfSub.textContent = "from scale when available";
+      }
+    }
 
     const rWeek = s.rate_lb_per_week;
     const rateEl = $("#s-rate");
@@ -778,19 +833,30 @@
     tbody.innerHTML = rows
       .map((e) => {
         const gap =
-          e.gap_days == null ? "—" : e.gap_days === 0 ? "0" : fmt(e.gap_days, 0);
-        const alpha = e.alpha == null ? "—" : fmt(e.alpha, 2);
+          e.gap_days == null
+            ? "—"
+            : e.gap_days < 0.01
+              ? "~0"
+              : e.gap_days < 1
+                ? fmt(e.gap_days * 24, 1) + "h"
+                : fmt(e.gap_days, 2) + "d";
+        const bf =
+          e.body_fat != null
+            ? fmt(e.body_fat, 1)
+            : e.body_fat_trend != null
+              ? "(" + fmt(e.body_fat_trend, 1) + ")"
+              : "—";
         const kcal =
           e.kcal_per_day == null
             ? "—"
             : `${e.kcal_per_day > 0 ? "+" : ""}${fmt(e.kcal_per_day, 0)}`;
         const kClass = signClass(e.kcal_per_day);
         return `<tr data-id="${e.id}">
-          <td>${e.date}</td>
+          <td>${formatWhen(e)}</td>
           <td class="num">${fmt(e.weight, 1)}</td>
           <td class="num">${fmt(e.trend, 2)}</td>
-          <td class="num">${gap}d</td>
-          <td class="num">${alpha}</td>
+          <td class="num">${bf}</td>
+          <td class="num">${gap}</td>
           <td class="num ${kClass}">${kcal}</td>
           <td><button type="button" class="linkish edit-btn" data-id="${e.id}">edit</button></td>
         </tr>`;
@@ -803,10 +869,10 @@
     const days = parseInt(range, 10);
     if (!days) return all;
     const last = all[all.length - 1];
-    const end = new Date(last.date + "T12:00:00");
+    const end = new Date(last.logged_at || last.date + "T12:00:00");
     const start = new Date(end);
     start.setDate(start.getDate() - days);
-    return all.filter((e) => new Date(e.date + "T12:00:00") >= start);
+    return all.filter((e) => new Date(e.logged_at || e.date + "T12:00:00") >= start);
   }
 
   function renderChart() {
@@ -814,8 +880,8 @@
     if (!ctx || typeof Chart === "undefined") return;
 
     const data = filterSeriesByRange(series);
-    const raw = data.map((e) => ({ x: e.date, y: e.weight }));
-    const trend = data.map((e) => ({ x: e.date, y: e.trend }));
+    const raw = data.map((e) => ({ x: e.logged_at || e.date, y: e.weight }));
+    const trend = data.map((e) => ({ x: e.logged_at || e.date, y: e.trend }));
 
     const goal = settings.goal_weight;
     const datasets = [
@@ -914,9 +980,11 @@
     ev.preventDefault();
     const msg = $("#form-msg");
     msg.hidden = true;
+    const bfRaw = $("#f-bf")?.value;
     const body = {
-      date: $("#f-date").value,
+      logged_at: fromLocalInput($("#f-when").value),
       weight: parseFloat($("#f-weight").value),
+      body_fat: bfRaw === "" || bfRaw == null ? null : parseFloat(bfRaw),
       note: $("#f-note").value || null,
     };
     try {
@@ -926,7 +994,8 @@
       });
       applyState(data);
       $("#f-note").value = "";
-      msg.textContent = `Saved ${fmt(body.weight, 1)} lb on ${body.date}`;
+      if ($("#f-bf")) $("#f-bf").value = "";
+      msg.textContent = `Saved ${fmt(body.weight, 1)} lb`;
       msg.className = "hint ok";
       msg.hidden = false;
       // unpin old AI copy so rule-based mood can update, then optional auto-pep
@@ -984,8 +1053,9 @@
     const entry = series.find((e) => e.id === id);
     if (!entry) return;
     $("#e-id").value = entry.id;
-    $("#e-date").value = entry.date;
+    $("#e-when").value = toLocalInput(entry.logged_at || entry.date);
     $("#e-weight").value = entry.weight;
+    $("#e-bf").value = entry.body_fat != null ? entry.body_fat : "";
     $("#e-note").value = entry.note || "";
     $("#edit-dialog").showModal();
   });
@@ -995,9 +1065,11 @@
   $("#edit-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const id = parseInt($("#e-id").value, 10);
+    const bfRaw = $("#e-bf").value;
     const body = {
-      date: $("#e-date").value,
+      logged_at: fromLocalInput($("#e-when").value),
       weight: parseFloat($("#e-weight").value),
+      body_fat: bfRaw === "" ? null : parseFloat(bfRaw),
       note: $("#e-note").value || null,
     };
     try {
@@ -1074,7 +1146,7 @@
   }
 
   // init
-  $("#f-date").value = todayISO();
+  if ($("#f-when")) $("#f-when").value = nowLocalInput();
   Promise.all([loadAll(), loadCachedCoach(), refreshKoboldStatus()])
     .then(() => {
       if (aiCoach) renderCoach();

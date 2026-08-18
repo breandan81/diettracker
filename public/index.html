@@ -9,7 +9,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-  <link rel="stylesheet" href="/style.css?v=10" />
+  <link rel="stylesheet" href="/style.css?v=11" />
 </head>
 <body class="mood-idle" id="body-mood">
   <div id="fx-layer" aria-hidden="true"></div>
@@ -131,6 +131,11 @@
         <div class="stat-value" id="s-kcal">—</div>
         <div class="stat-sub">kcal/day (from trend slope)</div>
       </div>
+      <div class="stat">
+        <div class="stat-label">Body fat</div>
+        <div class="stat-value" id="s-bf">—</div>
+        <div class="stat-sub" id="s-bf-sub">from scale when available</div>
+      </div>
       <div class="stat" id="stat-bmi">
         <div class="stat-label">BMI</div>
         <div class="stat-value" id="s-bmi">—</div>
@@ -150,12 +155,16 @@
       <h2>Log weight</h2>
       <form id="log-form" class="log-form">
         <label>
-          <span>Date</span>
-          <input type="date" id="f-date" required />
+          <span>When</span>
+          <input type="datetime-local" id="f-when" required />
         </label>
         <label>
           <span>Weight (lb)</span>
           <input type="number" id="f-weight" step="0.1" min="50" max="500" placeholder="185.2" required />
+        </label>
+        <label>
+          <span>Body fat % <em class="muted">(opt)</em></span>
+          <input type="number" id="f-bf" step="0.1" min="0" max="80" placeholder="—" />
         </label>
         <label class="grow">
           <span>Note <em class="muted">(optional)</em></span>
@@ -242,11 +251,11 @@
           <table id="hist">
             <thead>
               <tr>
-                <th>Date</th>
+                <th>When</th>
                 <th>Weight</th>
                 <th>Trend</th>
+                <th>BF%</th>
                 <th>Gap</th>
-                <th>α</th>
                 <th>kcal/d</th>
                 <th></th>
               </tr>
@@ -360,12 +369,16 @@
       <h3>Edit entry</h3>
       <input type="hidden" id="e-id" />
       <label>
-        <span>Date</span>
-        <input type="date" id="e-date" required />
+        <span>When</span>
+        <input type="datetime-local" id="e-when" required />
       </label>
       <label>
         <span>Weight (lb)</span>
         <input type="number" id="e-weight" step="0.1" min="50" max="500" required />
+      </label>
+      <label>
+        <span>Body fat %</span>
+        <input type="number" id="e-bf" step="0.1" min="0" max="80" />
       </label>
       <label>
         <span>Note</span>
@@ -380,7 +393,7 @@
     </form>
   </dialog>
 
-  <script src="/app.js?v=10"></script>
-  <script src="/photos-ui.js?v=10"></script>
+  <script src="/app.js?v=11"></script>
+  <script src="/photos-ui.js?v=11"></script>
 </body>
 </html>

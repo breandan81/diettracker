@@ -30,8 +30,9 @@ static NimBLEUUID UUID_SVC_FFE0("ffe0");
 static NimBLEUUID UUID_NOTIFY_FFE1("ffe1");
 static NimBLEUUID UUID_CMD_FFE3("ffe3");
 
-static const uint8_t VENDOR_BYTE = 0xFF;
+static uint8_t g_vendorByte = 0xFF;  // echoed from scale frames
 static const int32_t QN_EPOCH_OFFSET = 946656000;  // 2000-01-01 UTC
+static const uint8_t UNIT_LB = 0x02;
 
 // --- Runtime state ---
 static float g_lastPostedLb = -1;
@@ -44,6 +45,11 @@ static NimBLERemoteCharacteristic* g_cmdChr = nullptr;
 static bool g_wantConnect = false;
 static NimBLEAddress g_targetAddr;
 static bool g_haveTarget = false;
+
+// Handshake flags (once per GATT session)
+static bool g_sentUnit = false;
+static bool g_sentInit = false;
+static bool g_sentProfile = false;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -110,7 +116,19 @@ static bool shouldPost(float lb) {
   return true;
 }
 
-static bool postWeightLb(float lb) {
+static String nowISO_UTC() {
+  time_t now = time(nullptr);
+  if (now < 1700000000) {
+    return todayISO() + "T12:00:00Z";
+  }
+  struct tm tm;
+  gmtime_r(&now, &tm);
+  char buf[28];
+  strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tm);
+  return String(buf);
+}
+
+static bool postMeasurement(float lb, float bodyFatPct /* <0 if unknown */) {
   if (!g_wifiReady) {
     Serial.println("[http] wifi not ready");
     return false;
@@ -118,9 +136,12 @@ static bool postWeightLb(float lb) {
   if (!shouldPost(lb)) return false;
 
   String url = String("http://") + TRACKER_HOST + ":" + String(TRACKER_PORT) + TRACKER_PATH;
-  String body = String("{\"date\":\"") + todayISO()
-              + "\",\"weight\":" + String(lb, 2)
-              + ",\"note\":\"" + WEIGHT_NOTE + "\"}";
+  String body = String("{\"logged_at\":\"") + nowISO_UTC()
+              + "\",\"weight\":" + String(lb, 2);
+  if (bodyFatPct >= 0.0f && bodyFatPct <= 80.0f) {
+    body += ",\"body_fat\":" + String(bodyFatPct, 1);
+  }
+  body += ",\"note\":\"" + String(WEIGHT_NOTE) + "\"}";
 
   Serial.printf("[http] POST %s  %s\n", url.c_str(), body.c_str());
 
@@ -135,7 +156,7 @@ static bool postWeightLb(float lb) {
   String resp = http.getString();
   http.end();
 
-  Serial.printf("[http] -> %d  %s\n", code, resp.substring(0, 120).c_str());
+  Serial.printf("[http] -> %d  %s\n", code, resp.substring(0, 160).c_str());
   if (code >= 200 && code < 300) {
     g_lastPostedLb = lb;
     g_lastPostedMs = millis();
@@ -144,10 +165,14 @@ static bool postWeightLb(float lb) {
   return false;
 }
 
-static void onFinalKg(float kg, const char* via) {
+static void onFinalKg(float kg, float bodyFatPct, const char* via) {
   float lb = kgToLb(kg);
-  Serial.printf("[weight] %.2f kg = %.2f lb  via %s\n", kg, lb, via);
-  postWeightLb(lb);
+  if (bodyFatPct >= 0) {
+    Serial.printf("[weight] %.2f kg = %.2f lb  BF=%.1f%%  via %s\n", kg, lb, bodyFatPct, via);
+  } else {
+    Serial.printf("[weight] %.2f kg = %.2f lb  via %s\n", kg, lb, via);
+  }
+  postMeasurement(lb, bodyFatPct);
 }
 
 // ---------------------------------------------------------------------------
@@ -169,88 +194,143 @@ static bool parseAabbBroadcast(const uint8_t* payload, size_t len, float* outKg)
 }
 
 // ---------------------------------------------------------------------------
-// GATT notify parser (QN 0x10 measurement frames)
+// GATT: QN handshake + measurement frames
 // ---------------------------------------------------------------------------
 
+static bool cmdWrite(const uint8_t* buf, size_t n) {
+  if (!g_cmdChr) return false;
+  return g_cmdChr->writeValue(buf, n, false);
+}
+
+static bool sendUnitLb() {
+  // 13 09 <vendor> <unit> 10 00 00 00 <checksum>   unit 0x02 = lb
+  uint8_t cmd[9] = {0x13, 0x09, g_vendorByte, UNIT_LB, 0x10, 0x00, 0x00, 0x00, 0x00};
+  cmd[8] = checksum8(cmd, 8);
+  Serial.printf("[gatt] reply unit=lb vendor=0x%02X\n", g_vendorByte);
+  return cmdWrite(cmd, sizeof(cmd));
+}
+
+static bool sendMeasurementInit() {
+  // 20 08 <vendor> <ts LE u32> <checksum>
+  uint8_t cmd[8];
+  cmd[0] = 0x20;
+  cmd[1] = 0x08;
+  cmd[2] = g_vendorByte;
+  time_t now = time(nullptr);
+  uint32_t ts = (now > QN_EPOCH_OFFSET) ? (uint32_t)(now - QN_EPOCH_OFFSET) : 0;
+  cmd[3] = (uint8_t)(ts & 0xFF);
+  cmd[4] = (uint8_t)((ts >> 8) & 0xFF);
+  cmd[5] = (uint8_t)((ts >> 16) & 0xFF);
+  cmd[6] = (uint8_t)((ts >> 24) & 0xFF);
+  cmd[7] = checksum8(cmd, 7);
+  Serial.printf("[gatt] reply meas-init ts=%lu\n", (unsigned long)ts);
+  return cmdWrite(cmd, sizeof(cmd));
+}
+
+static bool sendBootstrapProfile() {
+  // Guest weight-only profile so extended scales start measuring (algorithm=0).
+  uint8_t payload[13];
+  payload[0] = 0xA0;
+  payload[1] = 0x0D;
+  payload[2] = 0x02;
+  payload[3] = 0xFE;
+  payload[4] = 0xFF;
+  payload[5] = 0xEE;
+  payload[6] = 0x01;  // sex
+  payload[7] = 0x00;  // age
+  payload[8] = 0x00;  // height hi
+  payload[9] = 0x00;  // height lo
+  payload[10] = 0x00; // algorithm 0 = no on-device BF
+  payload[11] = 0x02; // trailer
+  payload[12] = checksum8(payload, 12);
+  Serial.println("[gatt] reply bootstrap profile (weight-only)");
+  return cmdWrite(payload, 13);
+}
+
 static void handleQnNotify(uint8_t* data, size_t len) {
-  if (len < 6) return;
+  if (len < 2) return;
   uint8_t op = data[0];
   uint8_t flen = data[1];
 
+  // Capture vendor byte when present (not on profile frames)
+  if (len >= 3 && (op == 0x10 || op == 0x12 || op == 0x14 || op == 0x21 || op == 0x23)) {
+    g_vendorByte = data[2];
+  }
+
+  // --- handshake ---
+  if (op == 0x12) {  // unit request
+    Serial.printf("[gatt] op=0x12 unit-request flen=%u\n", flen);
+    if (!g_sentUnit) {
+      g_sentUnit = true;
+      sendUnitLb();
+    }
+    return;
+  }
+  if (op == 0x14) {  // measurement init request
+    Serial.printf("[gatt] op=0x14 meas-init-request flen=%u\n", flen);
+    if (!g_sentInit) {
+      g_sentInit = true;
+      sendMeasurementInit();
+    }
+    return;
+  }
+  if (op == 0x21) {  // pre-measurement
+    Serial.printf("[gatt] op=0x21 pre-meas flen=%u\n", flen);
+    // extended wants profile when length==0x05
+    if (flen == 0x05 && !g_sentProfile) {
+      g_sentProfile = true;
+      sendBootstrapProfile();
+    }
+    return;
+  }
+
   if (op != 0x10) {
-    // Useful for debugging handshake
     Serial.printf("[gatt] op=0x%02X len=%u flen=%u\n", op, (unsigned)len, flen);
     return;
   }
 
-  // Extended flavor: 10 0E/0F … status@4 weight@5..6 BE
-  if (flen >= 0x0E && len >= 7) {
+  // Extended flavor: 10 0E/0F … status@4 weight@5..6 BE; BF@11..12 when status==2
+  if ((flen == 0x0E || flen == 0x0F) && len >= 7) {
     uint8_t status = data[4];
-    // 0=unstable, 1=stable, 2=stable+metrics
     if (status == 1 || status == 2) {
       uint16_t raw = ((uint16_t)data[5] << 8) | data[6];
       float kg = raw / 100.0f;
-      if (kg > 0) onFinalKg(kg, "gatt-extended");
+      float bf = -1.0f;
+      if (status == 2 && len >= 13) {
+        uint16_t bfRaw = ((uint16_t)data[11] << 8) | data[12];
+        if (bfRaw > 0) bf = bfRaw / 10.0f;
+      }
+      if (kg > 0) onFinalKg(kg, bf, "gatt-extended");
+    } else {
+      Serial.printf("[gatt] extended unstable status=%u\n", status);
     }
     return;
   }
 
-  // Basic flavor: 10 0B … weight@3..4 BE, status@5
-  // status 0x01 = final (BIA done); 0x11 = stable weight, BIA running
+  // Basic flavor: 10 0B … weight@3..4 BE, status@5 — impedance present on final,
+  // but on-device BF needs a profile; we log weight (BF omitted unless we add calc).
   if (flen == 0x0B && len >= 6) {
     uint8_t status = data[5];
-    if (status == 0x01 || status == 0x11) {
-      uint16_t raw = ((uint16_t)data[3] << 8) | data[4];
-      float kg = raw / 100.0f;
-      // Prefer final 0x01; allow 0x11 once if we never see 0x01
-      if (status == 0x01) {
-        onFinalKg(kg, "gatt-basic-final");
-      } else {
-        // Debounce: only take BIA-running as fallback after a short hold
-        static float pending = 0;
-        static uint32_t pendingAt = 0;
-        pending = kg;
-        pendingAt = millis();
-        // If still no 0x01 within 4s, post the stable weight
-        // (handled in loop via pending — keep simple: post on 0x11 once)
-        static uint32_t lastBasic = 0;
-        if (millis() - lastBasic > 5000) {
-          onFinalKg(kg, "gatt-basic-stable");
-          lastBasic = millis();
-        }
-        (void)pending;
-        (void)pendingAt;
+    uint16_t raw = ((uint16_t)data[3] << 8) | data[4];
+    float kg = raw / 100.0f;
+    if (status == 0x01) {
+      onFinalKg(kg, -1.0f, "gatt-basic-final");
+    } else if (status == 0x11) {
+      static uint32_t lastBasic = 0;
+      if (millis() - lastBasic > 4000) {
+        onFinalKg(kg, -1.0f, "gatt-basic-stable");
+        lastBasic = millis();
       }
+    } else {
+      Serial.printf("[gatt] basic settling status=0x%02X kg=%.2f\n", status, kg);
     }
   }
 }
-
-class NotifyCallbacks : public NimBLEClientCallbacks {
-  // unused — notify uses characteristic callback
-};
 
 static void notifyCB(NimBLERemoteCharacteristic* chr, uint8_t* data, size_t len, bool isNotify) {
   (void)chr;
   (void)isNotify;
   handleQnNotify(data, len);
-}
-
-static bool sendMeasurementInit(NimBLERemoteCharacteristic* cmd) {
-  // 20 08 FF <ts LE u32> <checksum>
-  uint8_t cmdBuf[8];
-  cmdBuf[0] = 0x20;
-  cmdBuf[1] = 0x08;
-  cmdBuf[2] = VENDOR_BYTE;
-  time_t now = time(nullptr);
-  uint32_t ts = (now > QN_EPOCH_OFFSET) ? (uint32_t)(now - QN_EPOCH_OFFSET) : 0;
-  cmdBuf[3] = (uint8_t)(ts & 0xFF);
-  cmdBuf[4] = (uint8_t)((ts >> 8) & 0xFF);
-  cmdBuf[5] = (uint8_t)((ts >> 16) & 0xFF);
-  cmdBuf[6] = (uint8_t)((ts >> 24) & 0xFF);
-  cmdBuf[7] = checksum8(cmdBuf, 7);
-
-  Serial.printf("[gatt] write init ts=%lu\n", (unsigned long)ts);
-  return cmd->writeValue(cmdBuf, sizeof(cmdBuf), false);
 }
 
 static bool connectAndSubscribe(const NimBLEAddress& addr) {
@@ -311,12 +391,16 @@ static bool connectAndSubscribe(const NimBLEAddress& addr) {
     return false;
   }
 
-  delay(100);
-  if (!sendMeasurementInit(g_cmdChr)) {
-    Serial.println("[gatt] init write failed");
-  }
+  g_sentUnit = false;
+  g_sentInit = false;
+  g_sentProfile = false;
+  g_vendorByte = 0xFF;
 
-  Serial.println("[gatt] subscribed — step on scale if you haven't");
+  delay(100);
+  // Proactive init helps some firmwares; 0x12/0x14 handlers cover the rest
+  sendMeasurementInit();
+
+  Serial.println("[gatt] subscribed — step on scale");
   return true;
 }
 
@@ -345,7 +429,7 @@ class ScanCallbacks : public NimBLEScanCallbacks {
         if ((company == 0xFFFF || company == 0x00FF) && parseAabbBroadcast(payload, plen, &kg)) {
           if (nameOk || macForced || SCALE_MAC[0] == '\0') {
             Serial.printf("[adv] AABB final from %s\n", adv->getAddress().toString().c_str());
-            onFinalKg(kg, "broadcast-aabb");
+            onFinalKg(kg, -1.0f, "broadcast-aabb");
           }
         }
       }
