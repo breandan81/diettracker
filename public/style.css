@@ -338,11 +338,28 @@ main {
   overflow-y: auto;
 }
 .photo-dialog-meta h3 { margin: 0 0 12px; }
+.pd-compare-scores {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.pd-compare-scores.has-goal {
+  grid-template-columns: 1fr 1fr;
+}
+.pd-col-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
 .pd-scores {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 8px;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 .pd-scores > div {
   background: var(--panel-2);

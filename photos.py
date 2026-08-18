@@ -55,6 +55,14 @@ def ensure_photos_schema(conn: sqlite3.Connection) -> None:
         "projection_model": "TEXT",
         "projection_goal_lb": "REAL",
         "projection_created_at": "TEXT",
+        "projection_analysis_json": "TEXT",
+        "projection_bmi_point": "REAL",
+        "projection_bmi_low": "REAL",
+        "projection_bmi_high": "REAL",
+        "projection_appearance_score": "REAL",
+        "projection_appearance_justification": "TEXT",
+        "projection_confidence_overall": "TEXT",
+        "projection_analysis_model": "TEXT",
     }
     for col, typ in migrations.items():
         if col not in cols:
@@ -83,6 +91,14 @@ def row_to_dict(row: sqlite3.Row, include_analysis: bool = True) -> dict:
     d["projection_url"] = (
         f"/api/photos/{d['id']}/projection" if d.get("projection_filename") else None
     )
+    if d.get("projection_analysis_json"):
+        try:
+            d["projection_analysis"] = json.loads(d["projection_analysis_json"])
+        except Exception:
+            d["projection_analysis"] = None
+    else:
+        d["projection_analysis"] = None
+    d.pop("projection_analysis_json", None)
     return d
 
 
@@ -324,6 +340,30 @@ def save_goal_projection(
     out_path = photos_dir(data_dir) / fname
     out_path.write_bytes(result["bytes"])
 
+    # Re-rate the projected image with the same vision analyzer
+    proj_analysis_json = None
+    proj_bmi_point = proj_bmi_low = proj_bmi_high = None
+    proj_score = None
+    proj_just = None
+    proj_conf = None
+    proj_analysis_model = None
+    try:
+        analysis = analyze_image_file(out_path, result["mime"])
+        meta = analysis.pop("_meta", {})
+        proj_analysis_json = json.dumps(analysis)
+        bmi = analysis.get("bmi_estimate") or {}
+        app = analysis.get("appearance_rating") or {}
+        proj_bmi_point = bmi.get("point")
+        proj_bmi_low = bmi.get("range_low")
+        proj_bmi_high = bmi.get("range_high")
+        proj_score = app.get("score")
+        proj_just = app.get("justification")
+        proj_conf = analysis.get("confidence_overall")
+        proj_analysis_model = meta.get("model")
+    except Exception as e:
+        # Keep the Imagine result even if re-rate fails; surface error in prompt note
+        proj_just = f"(projection saved; re-rate failed: {e})"
+
     conn.execute(
         """
         UPDATE photos SET
@@ -333,6 +373,14 @@ def save_goal_projection(
             projection_model=?,
             projection_goal_lb=?,
             projection_created_at=?,
+            projection_analysis_json=?,
+            projection_bmi_point=?,
+            projection_bmi_low=?,
+            projection_bmi_high=?,
+            projection_appearance_score=?,
+            projection_appearance_justification=?,
+            projection_confidence_overall=?,
+            projection_analysis_model=?,
             updated_at=?
         WHERE id=?
         """,
@@ -343,6 +391,14 @@ def save_goal_projection(
             result["model"],
             goal_lb,
             now_iso,
+            proj_analysis_json,
+            proj_bmi_point,
+            proj_bmi_low,
+            proj_bmi_high,
+            proj_score,
+            proj_just,
+            proj_conf,
+            proj_analysis_model,
             now_iso,
             pid,
         ),

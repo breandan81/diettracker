@@ -9,7 +9,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-  <link rel="stylesheet" href="/style.css?v=9" />
+  <link rel="stylesheet" href="/style.css?v=10" />
 </head>
 <body class="mood-idle" id="body-mood">
   <div id="fx-layer" aria-hidden="true"></div>
@@ -320,12 +320,26 @@
       </div>
       <div class="photo-dialog-meta">
         <h3 id="pd-title">Photo</h3>
-        <div class="pd-scores">
-          <div><span class="muted">Appearance</span><strong id="pd-score">—</strong></div>
-          <div><span class="muted">Visual BMI</span><strong id="pd-bmi">—</strong></div>
-          <div><span class="muted">Confidence</span><strong id="pd-conf">—</strong></div>
+        <div class="pd-compare-scores">
+          <div class="pd-score-col">
+            <div class="pd-col-label">Now</div>
+            <div class="pd-scores">
+              <div><span class="muted">Appearance</span><strong id="pd-score">—</strong></div>
+              <div><span class="muted">Visual BMI</span><strong id="pd-bmi">—</strong></div>
+              <div><span class="muted">Confidence</span><strong id="pd-conf">—</strong></div>
+            </div>
+            <p id="pd-just" class="pd-just"></p>
+          </div>
+          <div class="pd-score-col" id="pd-goal-scores" hidden>
+            <div class="pd-col-label">At goal</div>
+            <div class="pd-scores">
+              <div><span class="muted">Appearance</span><strong id="pd-proj-score">—</strong></div>
+              <div><span class="muted">Visual BMI</span><strong id="pd-proj-bmi">—</strong></div>
+              <div><span class="muted">Confidence</span><strong id="pd-proj-conf">—</strong></div>
+            </div>
+            <p id="pd-proj-just" class="pd-just"></p>
+          </div>
         </div>
-        <p id="pd-just" class="pd-just"></p>
         <pre id="pd-obs" class="pd-obs"></pre>
         <p class="hint" id="pd-proj-msg" hidden></p>
         <div class="dialog-actions">
@@ -366,7 +380,7 @@
     </form>
   </dialog>
 
-  <script src="/app.js?v=9"></script>
-  <script src="/photos-ui.js?v=9"></script>
+  <script src="/app.js?v=10"></script>
+  <script src="/photos-ui.js?v=10"></script>
 </body>
 </html>
