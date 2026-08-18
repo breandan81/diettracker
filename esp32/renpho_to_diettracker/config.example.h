@@ -34,8 +34,9 @@
 #define MODE_BROADCAST 2
 #define BLE_MODE       MODE_AUTO
 
-// Don't re-POST the same/near weight within this window
-#define DEDUPE_SECONDS  90
+// After a successful log, ignore the scale for this long (it keeps advertising
+// the same final reading if we reconnect immediately).
+#define RESCAN_COOLDOWN_SECONDS  90
 
 // Serial debug
 #define SERIAL_BAUD  115200

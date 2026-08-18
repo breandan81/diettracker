@@ -545,6 +545,46 @@ class Handler(SimpleHTTPRequestHandler):
             note = str(note).strip() or None
 
         now = utc_now_iso()
+
+        # Dedupe auto-scale spam: same renpho weight (+BF) within 2 minutes
+        if note == "renpho-ble":
+            row = DB.execute(
+                """
+                SELECT id, date, logged_at, weight, body_fat, note
+                FROM weights
+                WHERE note = 'renpho-ble'
+                ORDER BY COALESCE(logged_at, created_at) DESC, id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            if row is not None:
+                try:
+                    prev_at = parse_datetime(row["logged_at"] or row["date"])
+                    cur_at = parse_datetime(logged_at)
+                    age_s = abs((cur_at - prev_at).total_seconds())
+                except Exception:
+                    age_s = 9999
+                same_w = abs(float(row["weight"]) - weight) < 0.08
+                prev_bf = row["body_fat"]
+                if body_fat is None and prev_bf is None:
+                    same_bf = True
+                elif body_fat is None or prev_bf is None:
+                    same_bf = False
+                else:
+                    same_bf = abs(float(prev_bf) - float(body_fat)) < 0.15
+                if age_s < 120 and same_w and same_bf:
+                    series, summ, half = load_trend()
+                    entry = next((e for e in series if e["id"] == row["id"]), None)
+                    return self._json(
+                        200,
+                        {
+                            "entry": entry,
+                            "deduped": True,
+                            "summary": attach_bmi({**summ, "half_life_days": half}),
+                            "series": series,
+                        },
+                    )
+
         cur = DB.execute(
             """
             INSERT INTO weights(date, logged_at, weight, body_fat, note, created_at, updated_at)
