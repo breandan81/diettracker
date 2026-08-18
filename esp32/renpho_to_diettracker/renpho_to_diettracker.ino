@@ -45,8 +45,9 @@ static NimBLERemoteCharacteristic* g_cmdChr = nullptr;
 static bool g_wantConnect = false;
 static NimBLEAddress g_targetAddr;
 static bool g_haveTarget = false;
-static uint32_t g_ignoreScaleUntil = 0;  // don't reconnect while scale still has last reading
+static uint32_t g_ignoreScaleUntil = 0;  // don't scan/connect until scale session is over
 static bool g_bleReady = false;
+static bool g_scanArmed = true;  // false during post-weigh cooldown
 
 // Handshake flags (once per GATT session)
 static bool g_sentUnit = false;
@@ -185,12 +186,13 @@ static void onFinalKg(float kg, float bodyFatPct, const char* via) {
   if (postMeasurement(lb, bodyFatPct)) {
     g_sessionPosted = true;
     g_havePendingStable = false;
-    g_endSession = true;  // disconnect + rescan in loop() so next step-on is fresh
+    g_endSession = true;  // disconnect in loop(); stay dark until cooldown ends
 #ifndef RESCAN_COOLDOWN_SECONDS
 #define RESCAN_COOLDOWN_SECONDS 90
 #endif
     g_ignoreScaleUntil = millis() + (uint32_t)RESCAN_COOLDOWN_SECONDS * 1000u;
-    Serial.printf("[gatt] posted — cooldown %ds before reconnect\n",
+    g_scanArmed = false;
+    Serial.printf("[gatt] posted — sleeping %ds (one log per scale session)\n",
                   RESCAN_COOLDOWN_SECONDS);
   }
 }
@@ -567,17 +569,8 @@ class ScanCallbacks : public NimBLEScanCallbacks {
 
 #if BLE_MODE == MODE_GATT || BLE_MODE == MODE_AUTO
     // Look for connectable QN / Renpho
+    if (!g_scanArmed) return;
     if ((nameOk || macForced) && adv->isConnectable()) {
-      if (g_ignoreScaleUntil != 0 && (int32_t)(millis() - g_ignoreScaleUntil) < 0) {
-        // Scale often keeps advertising the same final reading after we disconnect.
-        static uint32_t lastIgnoreLog = 0;
-        if (millis() - lastIgnoreLog > 5000) {
-          Serial.printf("[scan] ignoring scale (%lu s left in cooldown)\n",
-                        (unsigned long)((g_ignoreScaleUntil - millis()) / 1000u));
-          lastIgnoreLog = millis();
-        }
-        return;
-      }
       bool hasFff0 = adv->isAdvertisingService(UUID_SVC_FFF0);
       bool hasFfe0 = adv->isAdvertisingService(UUID_SVC_FFE0);
       if (hasFff0 || hasFfe0 || nameOk || macForced) {
@@ -685,12 +678,15 @@ void loop() {
       lastTry = millis();
       bool recovered = ensureWifi();
       if (recovered && g_bleReady) {
-        // WiFi blip on C3 often kills BLE scan — restart it
-        Serial.println("[ble] wifi recovered — restarting scan");
+        // WiFi blip on C3 often kills BLE scan — restart it if armed
+        Serial.println("[ble] wifi recovered");
         g_haveTarget = false;
         g_wantConnect = false;
-        startScan();
         fetchScaleProfile();
+        if (g_scanArmed) {
+          Serial.println("[ble] restarting scan");
+          startScan();
+        }
       }
     }
   } else if (millis() - g_profileFetchedMs > 300000UL) {
@@ -715,7 +711,7 @@ void loop() {
     onFinalKg(g_pendingKg, -1.0f, "gatt-stable-timeout");
   }
 
-  // After a successful post, drop the link so the next step-on is a new session
+  // After a successful post: disconnect and stay quiet until cooldown ends
   if (g_endSession) {
     g_endSession = false;
     if (g_client && g_client->isConnected()) {
@@ -725,11 +721,23 @@ void loop() {
     g_wantConnect = false;
     g_notifyChr = nullptr;
     g_cmdChr = nullptr;
-    delay(400);
+    stopScanQuiet();
+    Serial.println("[ble] session closed — waiting for cooldown before next weigh-in");
+  }
+
+  // Arm for the next scale power-on after cooldown
+  if (!g_scanArmed && g_ignoreScaleUntil != 0
+      && (int32_t)(millis() - g_ignoreScaleUntil) >= 0) {
+    g_scanArmed = true;
+    g_ignoreScaleUntil = 0;
+    g_haveTarget = false;
+    g_wantConnect = false;
+    g_sessionPosted = false;
+    Serial.println("[ble] armed — step on scale for next log");
     startScan();
   }
 
-  // If connected but idle too long, disconnect and rescan
+  // If connected but idle too long, disconnect and rescan (only if armed)
   static uint32_t connectedAt = 0;
   if (g_client && g_client->isConnected()) {
     if (connectedAt == 0) connectedAt = millis();
@@ -739,7 +747,7 @@ void loop() {
       g_haveTarget = false;
       connectedAt = 0;
       delay(300);
-      startScan();
+      if (g_scanArmed) startScan();
     }
   } else {
     connectedAt = 0;
