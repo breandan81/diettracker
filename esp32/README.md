@@ -37,14 +37,39 @@ WiFi + HTTPClient ship with the ESP32 Arduino core.
 1. Copy `config.example.h` → `config.h` and edit WiFi + tracker URL.
 2. Optionally set `SCALE_MAC` after a first scan (Serial prints advertisements).
 3. Set `BLE_MODE` to `MODE_AUTO`, `MODE_GATT`, or `MODE_BROADCAST`.
-4. Flash `renpho_to_diettracker.ino`.
-5. Open Serial Monitor @ **115200** with **DTR/RTS off** (otherwise the C3 keeps resetting):
+4. Flash `renpho_to_diettracker.ino` (ESP32-C3 SuperMini example):
+
+```bash
+FQBN=esp32:esp32:esp32c3:CDCOnBoot=cdc,UploadSpeed=115200,PartitionScheme=huge_app
+arduino-cli compile --fqbn "$FQBN" renpho_to_diettracker
+arduino-cli upload -p /dev/ttyACM0 --fqbn "$FQBN" renpho_to_diettracker
+```
+
+5. Open Serial Monitor @ **115200** with **DTR/RTS off** (otherwise the C3 keeps resetting / WiFi comes up before BLE looks wrong):
 
 ```bash
 arduino-cli monitor -p /dev/ttyACM0 -c baudrate=115200,dtr=off,rts=off
 ```
 
-6. Step on the scale. After a successful log, wait ~90s (cooldown) before the next weigh-in.
+6. Step on the scale. Expect one POST per power-on. After success you should see
+   `session closed` then ~90s later `[ble] armed — step on scale for next log`.
+   Only then will a second weigh-in connect.
+
+## One-shot session state machine
+
+Duplicate GATT finals used to double-POST. Logic now lives in pure C++
+`renpho_to_diettracker/scale_session.h` (no Arduino deps):
+
+- **Armed** → connect on advertisement
+- **InSession** → claim at most one measurement *before* HTTP (spam finals ignored)
+- **Cooldown** → no scan/connect for `RESCAN_COOLDOWN_SECONDS` (default 90)
+- Post failure un-claims so the same session can retry; disconnect without a claim re-arms
+
+Host unit tests (no ESP toolchain):
+
+```bash
+make -C renpho_to_diettracker test
+```
 
 ## Config knobs (`config.h`)
 
@@ -56,7 +81,7 @@ arduino-cli monitor -p /dev/ttyACM0 -c baudrate=115200,dtr=off,rts=off
 | `WEIGHT_UNIT_POST` | `"lb"` (matches the tracker) |
 | `SCALE_MAC` | `""` = first matching Renpho/QN device; or `"AA:BB:..."` |
 | `BLE_MODE` | `MODE_AUTO` tries GATT then falls back to broadcast parse |
-| `DEDUPE_SECONDS` | Ignore repeat posts within N seconds |
+| `RESCAN_COOLDOWN_SECONDS` | Ignore scale after a successful log (default 90) |
 
 ## Protocol sketch (what the code does)
 
@@ -66,12 +91,15 @@ arduino-cli monitor -p /dev/ttyACM0 -c baudrate=115200,dtr=off,rts=off
 
 Weight is converted to **lb** before POST (`kg * 2.2046226218`).
 
-## Limitations (v0 sketch)
+## Limitations
 
-- Not a full port of `renpho-escs20m` (no full body-comp / multi-user profile dance).
-- Intermediate scale readings are ignored; only **final/stable** weights POST.
+- Profile (height/sex/age/athlete) is fetched from the tracker `/api/scale-profile`
+  so the scale can compute body fat; incomplete profile → weight-only logs.
+- Intermediate unstable readings are ignored; stable waits briefly for a BF final,
+  then times out and POSTs weight alone.
 - If GATT handshake fails on your HVIN, try `MODE_BROADCAST` or capture a phone HCI log (see FUTURE.md).
 - Keep the Renpho phone app disconnected while testing (exclusive BLE).
+- Tracker also dedupes near-identical posts (~2 min); the ESP still enforces one claim per power-on.
 
 ## After it works
 

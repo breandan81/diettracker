@@ -2,7 +2,7 @@
 
 ## Renpho BLE auto-ingest (ES-CS20M / Elis 1)
 
-**Status:** ESP32 sketch sketched — see [`esp32/`](./esp32/)  
+**Status:** Working on ESP32-C3 — one POST per scale power-on (claim-before-HTTP + cooldown), body fat via `/api/scale-profile`. See [`esp32/`](./esp32/).  
 **Goal:** When you step on the Renpho scale, weight lands in Hacker's Diet automatically — no web UI action.
 
 ### How it works (auto, not click-to-sync)
@@ -24,15 +24,14 @@
 - Disconnect Renpho phone app while testing
 - Prefer tracker **LAN IP** over mDNS in `config.h`
 
-### Still TODO when bringing hardware up
+### Still nice-to-have
 
-- Confirm which mode works on your HVIN (`MODE_GATT` vs `MODE_BROADCAST`)
-- Lock `SCALE_MAC` after first discovery
-- Optional: API ingest token; store impedance later
-- Keep manual log form as fallback
+- Lock `SCALE_MAC` after first discovery (multi-scale households)
+- Optional API ingest token; store impedance / water % later
+- Keep manual log form as fallback (already present)
 
-### Out of scope for v1
+### Out of scope for now
 
 - Renpho cloud / app OAuth
-- Full on-device body-comp / multi-user profile dance (use community libs if needed)
-- Calorie logging (separate future item)
+- Full multi-user on-scale profile dance
+- Calorie / food logging (separate future item)

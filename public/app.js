@@ -965,9 +965,25 @@
       });
     }
 
+    const showBf = bfRaw.length > 0 || bfTrend.length > 0;
+    const bfSamples = bfRaw.concat(bfTrend).map((p) => p.y);
+    const bfAxis =
+      typeof HdBfAxis !== "undefined"
+        ? HdBfAxis.bodyFatAxisRange(settings.sex, settings.age, bfSamples)
+        : { min: 6, max: 35, label: "lean→obese" };
+
+    const bfHint = $("#chart-bf-hint");
+    if (bfHint) {
+      bfHint.textContent = showBf
+        ? `BF axis fixed to ${bfAxis.label} — not auto-zoomed to today's range.`
+        : "";
+    }
+
     if (chart) {
       chart.data.datasets = datasets;
-      chart.options.scales.yBf.display = bfRaw.length > 0 || bfTrend.length > 0;
+      chart.options.scales.yBf.display = showBf;
+      chart.options.scales.yBf.min = bfAxis.min;
+      chart.options.scales.yBf.max = bfAxis.max;
       chart.update("none");
       return;
     }
@@ -1022,7 +1038,9 @@
           },
           yBf: {
             position: "right",
-            display: bfRaw.length > 0 || bfTrend.length > 0,
+            display: showBf,
+            min: bfAxis.min,
+            max: bfAxis.max,
             grid: { drawOnChartArea: false },
             ticks: {
               color: "#e07070",

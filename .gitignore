@@ -22,6 +22,7 @@ venv/
 
 # ESP32 local secrets (copy from config.example.h)
 esp32/**/config.h
+esp32/**/test/test_scale_session
 
 secrets.env
 secrets.php

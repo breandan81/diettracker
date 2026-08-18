@@ -2,11 +2,17 @@
  * Renpho ES-CS20M / Elis 1  →  Hacker's Diet tracker
  *
  * Listens for a weigh-in over BLE, then POSTs:
- *   {"date":"YYYY-MM-DD","weight":197.4,"note":"renpho-ble"}
+ *   {"weight":197.4,"body_fat":25.8,"note":"renpho-ble"}
  * to http://TRACKER_HOST:8510/api/weights
+ * (server stamps logged_at; date is derived there).
  *
- * Board: ESP32 (+ WiFi). Library: NimBLE-Arduino (h2zero).
+ * One POST per scale power-on: ScaleSession claims before HTTP so spam
+ * finals cannot double-log; then cooldown → re-arm. Logic in
+ * scale_session.h; host tests: `make test` in this directory.
+ *
+ * Board: ESP32-C3 (+ WiFi). Library: NimBLE-Arduino (h2zero).
  * Config: copy config.example.h → config.h
+ * Monitor: baud 115200, dtr=off, rts=off (C3 USB-Serial/JTAG).
  *
  * Protocol notes distilled from community reverse-engineering
  * (openScale / renpho-escs20m). Unofficial — not affiliated with Renpho.
@@ -19,6 +25,11 @@
 #include <NimBLEDevice.h>
 
 #include "config.h"
+#include "scale_session.h"
+
+#ifndef RESCAN_COOLDOWN_SECONDS
+#define RESCAN_COOLDOWN_SECONDS 90
+#endif
 
 // --- QN GATT (FFF0 layout used by many Renpho ES-CS20M units) ---
 static NimBLEUUID UUID_SVC_FFF0("fff0");
@@ -45,21 +56,16 @@ static NimBLERemoteCharacteristic* g_cmdChr = nullptr;
 static bool g_wantConnect = false;
 static NimBLEAddress g_targetAddr;
 static bool g_haveTarget = false;
-static uint32_t g_ignoreScaleUntil = 0;  // don't scan/connect until scale session is over
 static bool g_bleReady = false;
-static bool g_scanArmed = true;  // false during post-weigh cooldown
+static bool g_endSession = false;  // disconnect in loop() after successful post
+
+// One-shot / cooldown state machine (unit-tested in test/test_scale_session.cpp)
+static ScaleSession g_session((uint32_t)RESCAN_COOLDOWN_SECONDS * 1000u);
 
 // Handshake flags (once per GATT session)
 static bool g_sentUnit = false;
 static bool g_sentInit = false;
 static bool g_sentProfile = false;
-static bool g_sessionPosted = false;   // one weigh-in per GATT session
-static bool g_endSession = false;      // set from notify; handled in loop()
-
-// Pending status=1 (stable, no BF yet) — wait briefly for status=2
-static bool g_havePendingStable = false;
-static float g_pendingKg = 0;
-static uint32_t g_pendingMs = 0;
 
 // Cached profile from diet tracker /api/scale-profile
 static bool g_profileReady = false;
@@ -173,27 +179,27 @@ static bool postMeasurement(float lb, float bodyFatPct /* <0 if unknown */) {
   return false;
 }
 
-static void onFinalKg(float kg, float bodyFatPct, const char* via) {
-  if (g_sessionPosted) {
-    return;  // already logged this GATT session
-  }
-  float lb = kgToLb(kg);
-  if (bodyFatPct >= 0) {
-    Serial.printf("[weight] %.2f kg = %.2f lb  BF=%.1f%%  via %s\n", kg, lb, bodyFatPct, via);
+/**
+ * Called only after ScaleSession has already claimed the measurement.
+ * Claim-before-HTTP means duplicate finals cannot reach here twice.
+ */
+static void postClaimedMeasurement(const ScaleMeasurement& m, const char* via) {
+  float lb = kgToLb(m.weight_kg);
+  if (m.body_fat >= 0) {
+    Serial.printf("[weight] %.2f kg = %.2f lb  BF=%.1f%%  via %s\n",
+                  m.weight_kg, lb, m.body_fat, via);
   } else {
-    Serial.printf("[weight] %.2f kg = %.2f lb  via %s\n", kg, lb, via);
+    Serial.printf("[weight] %.2f kg = %.2f lb  via %s\n", m.weight_kg, lb, via);
   }
-  if (postMeasurement(lb, bodyFatPct)) {
-    g_sessionPosted = true;
-    g_havePendingStable = false;
+  uint32_t now = millis();
+  if (postMeasurement(lb, m.body_fat)) {
+    g_session.onPostSuccess(now);
     g_endSession = true;  // disconnect in loop(); stay dark until cooldown ends
-#ifndef RESCAN_COOLDOWN_SECONDS
-#define RESCAN_COOLDOWN_SECONDS 90
-#endif
-    g_ignoreScaleUntil = millis() + (uint32_t)RESCAN_COOLDOWN_SECONDS * 1000u;
-    g_scanArmed = false;
     Serial.printf("[gatt] posted — sleeping %ds (one log per scale session)\n",
                   RESCAN_COOLDOWN_SECONDS);
+  } else {
+    g_session.onPostFailure(now);
+    Serial.println("[gatt] post failed — will accept another final this session");
   }
 }
 
@@ -408,31 +414,28 @@ static void handleQnNotify(uint8_t* data, size_t len) {
     return;
   }
 
-  if (g_sessionPosted) return;
+  if (g_session.hasClaimed() || g_session.phase() != ScalePhase::InSession) return;
+
+  uint32_t now = millis();
+  ScaleMeasurement m{};
 
   // Extended flavor: 10 0E/0F … status@4 weight@5..6 BE; BF@11..12 when status==2
   if ((flen == 0x0E || flen == 0x0F) && len >= 7) {
     uint8_t status = data[4];
     uint16_t raw = ((uint16_t)data[5] << 8) | data[6];
     float kg = raw / 100.0f;
-    if (status == 2) {
-      // Final with on-device metrics — preferred
-      float bf = -1.0f;
-      if (len >= 13) {
-        uint16_t bfRaw = ((uint16_t)data[11] << 8) | data[12];
-        if (bfRaw > 0) bf = bfRaw / 10.0f;
-      }
-      if (kg > 0) onFinalKg(kg, bf, "gatt-extended-final");
-    } else if (status == 1) {
-      // Stable weight, BF may follow in status=2 — wait briefly in loop()
-      if (kg > 0) {
-        g_pendingKg = kg;
-        g_pendingMs = millis();
-        g_havePendingStable = true;
-        Serial.printf("[gatt] stable %.2f kg — waiting for BF frame\n", kg);
-      }
-    } else {
+    float bf = -1.0f;
+    if (status == 2 && len >= 13) {
+      uint16_t bfRaw = ((uint16_t)data[11] << 8) | data[12];
+      if (bfRaw > 0) bf = bfRaw / 10.0f;
+    }
+    if (status == 1 && kg > 0) {
+      Serial.printf("[gatt] stable %.2f kg — waiting for BF frame\n", kg);
+    } else if (status == 0) {
       Serial.printf("[gatt] extended unstable status=%u\n", status);
+    }
+    if (g_session.onExtendedFrame(now, status, kg, bf, &m)) {
+      postClaimedMeasurement(m, "gatt-extended-final");
     }
     return;
   }
@@ -442,15 +445,13 @@ static void handleQnNotify(uint8_t* data, size_t len) {
     uint8_t status = data[5];
     uint16_t raw = ((uint16_t)data[3] << 8) | data[4];
     float kg = raw / 100.0f;
-    if (status == 0x01) {
-      onFinalKg(kg, -1.0f, "gatt-basic-final");
-    } else if (status == 0x11) {
-      g_pendingKg = kg;
-      g_pendingMs = millis();
-      g_havePendingStable = true;
+    if (status == 0x11 && kg > 0) {
       Serial.printf("[gatt] basic stable %.2f kg — waiting for final\n", kg);
-    } else {
+    } else if (status != 0x01 && status != 0x11) {
       Serial.printf("[gatt] basic settling status=0x%02X kg=%.2f\n", status, kg);
+    }
+    if (g_session.onBasicFrame(now, status, kg, &m)) {
+      postClaimedMeasurement(m, status == 0x01 ? "gatt-basic-final" : "gatt-basic");
     }
   }
 }
@@ -522,10 +523,9 @@ static bool connectAndSubscribe(const NimBLEAddress& addr) {
   g_sentUnit = false;
   g_sentInit = false;
   g_sentProfile = false;
-  g_sessionPosted = false;
   g_endSession = false;
-  g_havePendingStable = false;
   g_vendorByte = 0xFF;
+  g_session.onConnected(millis());
 
   delay(100);
   // Proactive init helps some firmwares; 0x12/0x14 handlers cover the rest
@@ -559,8 +559,11 @@ class ScanCallbacks : public NimBLEScanCallbacks {
         float kg = 0;
         if ((company == 0xFFFF || company == 0x00FF) && parseAabbBroadcast(payload, plen, &kg)) {
           if (nameOk || macForced || SCALE_MAC[0] == '\0') {
-            Serial.printf("[adv] AABB final from %s\n", adv->getAddress().toString().c_str());
-            onFinalKg(kg, -1.0f, "broadcast-aabb");
+            ScaleMeasurement m{};
+            if (g_session.onBroadcastFinal(millis(), kg, &m)) {
+              Serial.printf("[adv] AABB final from %s\n", adv->getAddress().toString().c_str());
+              postClaimedMeasurement(m, "broadcast-aabb");
+            }
           }
         }
       }
@@ -569,7 +572,7 @@ class ScanCallbacks : public NimBLEScanCallbacks {
 
 #if BLE_MODE == MODE_GATT || BLE_MODE == MODE_AUTO
     // Look for connectable QN / Renpho
-    if (!g_scanArmed) return;
+    if (!g_session.shouldConnect(millis())) return;
     if ((nameOk || macForced) && adv->isConnectable()) {
       bool hasFff0 = adv->isAdvertisingService(UUID_SVC_FFF0);
       bool hasFfe0 = adv->isAdvertisingService(UUID_SVC_FFE0);
@@ -683,7 +686,7 @@ void loop() {
         g_haveTarget = false;
         g_wantConnect = false;
         fetchScaleProfile();
-        if (g_scanArmed) {
+        if (g_session.isArmed()) {
           Serial.println("[ble] restarting scan");
           startScan();
         }
@@ -700,15 +703,18 @@ void loop() {
     bool ok = connectAndSubscribe(g_targetAddr);
     if (!ok) {
       g_haveTarget = false;
+      g_session.onDisconnected(millis());
       delay(500);
-      startScan();
+      if (g_session.isArmed()) startScan();
     }
   }
 
   // Flush pending stable weight if BF frame never arrives
-  if (g_havePendingStable && !g_sessionPosted && (millis() - g_pendingMs) > 2500u) {
-    g_havePendingStable = false;
-    onFinalKg(g_pendingKg, -1.0f, "gatt-stable-timeout");
+  {
+    ScaleMeasurement m{};
+    if (g_session.onTick(millis(), 2500u, &m)) {
+      postClaimedMeasurement(m, "gatt-stable-timeout");
+    }
   }
 
   // After a successful post: disconnect and stay quiet until cooldown ends
@@ -717,6 +723,7 @@ void loop() {
     if (g_client && g_client->isConnected()) {
       g_client->disconnect();
     }
+    g_session.onDisconnected(millis());  // no-op if already Cooldown via onPostSuccess
     g_haveTarget = false;
     g_wantConnect = false;
     g_notifyChr = nullptr;
@@ -726,30 +733,37 @@ void loop() {
   }
 
   // Arm for the next scale power-on after cooldown
-  if (!g_scanArmed && g_ignoreScaleUntil != 0
-      && (int32_t)(millis() - g_ignoreScaleUntil) >= 0) {
-    g_scanArmed = true;
-    g_ignoreScaleUntil = 0;
+  if (g_session.shouldArm(millis())) {
     g_haveTarget = false;
     g_wantConnect = false;
-    g_sessionPosted = false;
     Serial.println("[ble] armed — step on scale for next log");
     startScan();
   }
 
   // If connected but idle too long, disconnect and rescan (only if armed)
   static uint32_t connectedAt = 0;
+  static bool wasConnected = false;
   if (g_client && g_client->isConnected()) {
+    wasConnected = true;
     if (connectedAt == 0) connectedAt = millis();
     if (millis() - connectedAt > 45000) {
       Serial.println("[gatt] session timeout — disconnect");
       g_client->disconnect();
+      g_session.onDisconnected(millis());
       g_haveTarget = false;
       connectedAt = 0;
+      wasConnected = false;
       delay(300);
-      if (g_scanArmed) startScan();
+      if (g_session.isArmed()) startScan();
     }
   } else {
+    if (wasConnected) {
+      // Unexpected drop (scale powered off mid-session)
+      g_session.onDisconnected(millis());
+      wasConnected = false;
+      g_haveTarget = false;
+      if (g_session.isArmed()) startScan();
+    }
     connectedAt = 0;
   }
 #endif
