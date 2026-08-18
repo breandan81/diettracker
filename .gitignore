@@ -19,3 +19,6 @@ venv/
 *~
 .idea/
 .vscode/
+
+# ESP32 local secrets (copy from config.example.h)
+esp32/**/config.h

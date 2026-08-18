@@ -2,33 +2,37 @@
 
 ## Renpho BLE auto-ingest (ES-CS20M / Elis 1)
 
-**Status:** noted, not started  
+**Status:** ESP32 sketch sketched — see [`esp32/`](./esp32/)  
 **Goal:** When you step on the Renpho scale, weight lands in Hacker's Diet automatically — no web UI action.
 
-### How it would work (auto, not click-to-sync)
+### How it works (auto, not click-to-sync)
 
 1. Scale wakes on weigh-in and advertises / accepts a short BLE GATT session.
-2. A **background listener** (always-on) catches the measurement.
-3. Listener `POST`s to `/api/weights` (date + weight, optional note like `renpho-ble`).
+2. ESP32 near the scale catches the measurement (broadcast `0xAABB` and/or QN GATT `FFF0`/`FFE0`).
+3. Firmware `POST`s to `/api/weights` (`note: renpho-ble`).
 4. EMA / BMI / coach update as usual; page just reflects new data on refresh.
 
-You would **not** need to open the web page or press a button for logging. The page is only for charts/settings/pep talks.
+### Sketch
+
+- [`esp32/README.md`](./esp32/README.md) — flash + config
+- [`esp32/renpho_to_diettracker/`](./esp32/renpho_to_diettracker/) — Arduino / NimBLE sketch
 
 ### Prerequisites
 
-- **BLE radio near the scale:** USB dongle on tomServo, *or* ESP32 / ESPHome Bluetooth proxy (tomServo currently has no `hci` adapter).
-- Community stack options: [ble-scale-sync](https://github.com/KristianP26/ble-scale-sync) (Renpho Elis 1 / ES-CS20M → webhook / MQTT / JSONL), openScale lineage, HA `renpho_fitness_scale_ble`.
-- Wire exporter → `http://tomservo.local:8510/api/weights` (or a small ingest wrapper for dedupe / multi-user).
+- ESP32 with WiFi + BLE, powered near the scale
+- Check HVIN/FCC on the scale sticker (some ES-CS20M revisions differ)
+- Disconnect Renpho phone app while testing
+- Prefer tracker **LAN IP** over mDNS in `config.h`
 
-### Design notes when building
+### Still TODO when bringing hardware up
 
-- Deduplicate: same MAC + timestamp (±few seconds) shouldn’t double-log.
-- Prefer **final stable weight** (scale often streams intermediate values).
-- Optional: store impedance / body-fat later; v1 = weight only.
-- Keep manual log form as fallback.
-- No official Renpho BLE docs — rely on reverse-engineered adapters; model-specific.
+- Confirm which mode works on your HVIN (`MODE_GATT` vs `MODE_BROADCAST`)
+- Lock `SCALE_MAC` after first discovery
+- Optional: API ingest token; store impedance later
+- Keep manual log form as fallback
 
 ### Out of scope for v1
 
 - Renpho cloud / app OAuth
+- Full on-device body-comp / multi-user profile dance (use community libs if needed)
 - Calorie logging (separate future item)
