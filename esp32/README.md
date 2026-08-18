@@ -38,8 +38,13 @@ WiFi + HTTPClient ship with the ESP32 Arduino core.
 2. Optionally set `SCALE_MAC` after a first scan (Serial prints advertisements).
 3. Set `BLE_MODE` to `MODE_AUTO`, `MODE_GATT`, or `MODE_BROADCAST`.
 4. Flash `renpho_to_diettracker.ino`.
-5. Open Serial Monitor @ **115200**.
-6. Step on the scale.
+5. Open Serial Monitor @ **115200** with **DTR/RTS off** (otherwise the C3 keeps resetting):
+
+```bash
+arduino-cli monitor -p /dev/ttyACM0 -c baudrate=115200,dtr=off,rts=off
+```
+
+6. Step on the scale. After a successful log, wait ~90s (cooldown) before the next weigh-in.
 
 ## Config knobs (`config.h`)
 

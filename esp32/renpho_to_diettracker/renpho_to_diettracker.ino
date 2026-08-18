@@ -46,6 +46,7 @@ static bool g_wantConnect = false;
 static NimBLEAddress g_targetAddr;
 static bool g_haveTarget = false;
 static uint32_t g_ignoreScaleUntil = 0;  // don't reconnect while scale still has last reading
+static bool g_bleReady = false;
 
 // Handshake flags (once per GATT session)
 static bool g_sentUnit = false;
@@ -118,6 +119,14 @@ static String todayISO() {
   return String(buf);
 }
 
+static void stopScanQuiet() {
+  if (!g_bleReady) return;
+  NimBLEScan* scan = NimBLEDevice::getScan();
+  if (scan && scan->isScanning()) {
+    scan->stop();
+  }
+}
+
 static bool postMeasurement(float lb, float bodyFatPct /* <0 if unknown */) {
   if (!g_wifiReady) {
     Serial.println("[http] wifi not ready");
@@ -127,6 +136,10 @@ static bool postMeasurement(float lb, float bodyFatPct /* <0 if unknown */) {
     Serial.printf("[reject] out of range %.2f lb\n", lb);
     return false;
   }
+
+  // C3 shares radio between WiFi + BLE — pause scan during HTTP
+  stopScanQuiet();
+  delay(50);
 
   // Do NOT send logged_at — the diet tracker stamps with its own system clock.
   String url = String("http://") + TRACKER_HOST + ":" + String(TRACKER_PORT) + TRACKER_PATH;
@@ -148,6 +161,7 @@ static bool postMeasurement(float lb, float bodyFatPct /* <0 if unknown */) {
   int code = http.POST(body);
   String resp = http.getString();
   http.end();
+  delay(50);
 
   Serial.printf("[http] -> %d  %s\n", code, resp.substring(0, 160).c_str());
   if (code >= 200 && code < 300) {
@@ -598,24 +612,30 @@ class ScanCallbacks : public NimBLEScanCallbacks {
 static ScanCallbacks scanCallbacks;
 
 static void startScan() {
+  if (!g_bleReady) return;
   NimBLEScan* scan = NimBLEDevice::getScan();
+  if (scan->isScanning()) {
+    scan->stop();
+    delay(20);
+  }
   scan->setScanCallbacks(&scanCallbacks, false);
   scan->setActiveScan(true);
   scan->setInterval(80);
   scan->setWindow(40);
   scan->setMaxResults(0);
   Serial.println("[scan] start");
-  scan->start(0, false, true);  // forever, don't clear results dump
+  scan->start(0, false, true);  // forever
 }
 
 // ---------------------------------------------------------------------------
 // WiFi / time
 // ---------------------------------------------------------------------------
 
-static void ensureWifi() {
+// Returns true if WiFi was down and just came back.
+static bool ensureWifi() {
   if (WiFi.status() == WL_CONNECTED) {
     g_wifiReady = true;
-    return;
+    return false;
   }
   g_wifiReady = false;
   Serial.printf("[wifi] connecting to %s …\n", WIFI_SSID);
@@ -630,11 +650,11 @@ static void ensureWifi() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.printf("[wifi] ok %s\n", WiFi.localIP().toString().c_str());
     g_wifiReady = true;
-    // US Central-ish; adjust if you want — date string only needs calendar day
     configTime(-6 * 3600, 0, "pool.ntp.org", "time.nist.gov");
-  } else {
-    Serial.println("[wifi] FAILED");
+    return true;  // recovered
   }
+  Serial.println("[wifi] FAILED");
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -653,6 +673,7 @@ void setup() {
 
   NimBLEDevice::init("diet-ble");
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);
+  g_bleReady = true;
 
   startScan();
 }
@@ -662,7 +683,15 @@ void loop() {
     static uint32_t lastTry = 0;
     if (millis() - lastTry > 10000) {
       lastTry = millis();
-      ensureWifi();
+      bool recovered = ensureWifi();
+      if (recovered && g_bleReady) {
+        // WiFi blip on C3 often kills BLE scan — restart it
+        Serial.println("[ble] wifi recovered — restarting scan");
+        g_haveTarget = false;
+        g_wantConnect = false;
+        startScan();
+        fetchScaleProfile();
+      }
     }
   } else if (millis() - g_profileFetchedMs > 300000UL) {
     // refresh profile every 5 minutes
