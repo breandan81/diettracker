@@ -43,13 +43,22 @@ Classic daily α≈0.1 ≈ half-life of ~6.6 days (default **7**).
 | POST | `/api/weights` | `{date, weight, note?}` |
 | PUT | `/api/weights/:id` | update |
 | DELETE | `/api/weights/:id` | delete |
-| GET/PUT | `/api/settings` | `half_life_days`, `goal_weight` |
+| GET/PUT | `/api/settings` | `half_life_days`, `goal_weight`, `height_in` |
 | GET | `/api/coach/status` | KoboldCPP reachability + model |
 | GET | `/api/coach` | last cached pep talk |
 | POST | `/api/coach` | `{style?: pep\|roast\|haiku\|brief}` → generate via Kobold |
+| GET | `/api/vision/status` | xAI key configured? |
+| GET | `/api/photos` | progress photos + ratings |
+| POST | `/api/photos` | multipart `file` + `date` (+ optional `note`, `analyze`) |
+| GET | `/api/photos/:id` | one photo |
+| GET | `/api/photos/:id/image` | image bytes |
+| POST | `/api/photos/:id/analyze` | re-run Grok vision |
+| DELETE | `/api/photos/:id` | delete photo + file |
+| GET | `/api/photos/series` | chart series (appearance + visual BMI) |
 
-Env: `KOBOLD_URL` (default `http://127.0.0.1:5001`), `KOBOLD_TIMEOUT` (default 90s).
+Env: `KOBOLD_URL`, `KOBOLD_TIMEOUT`, `XAI_API_KEY` / `GROK_API_KEY`, `XAI_MODEL` (default `grok-4.6`).  
+Secrets: gitignored `secrets.env` (copied from other local webapps’ `GROK_API_KEY` pattern). Photos live under `data/photos/` (gitignored with `data/`).
 
 ## Future improvements
 
-See [`FUTURE.md`](./FUTURE.md).
+See [`FUTURE.md`](./FUTURE.md). Also [`esp32/`](./esp32/) for Renpho BLE auto-log sketch.

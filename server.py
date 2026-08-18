@@ -15,6 +15,17 @@ from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
 
 from coach import generate_pep, kobold_status
+from photos import (
+    create_photo,
+    delete_photo,
+    ensure_photos_schema,
+    get_photo,
+    list_photos,
+    parse_multipart,
+    photo_file_path,
+    reanalyze_photo,
+    series_for_chart,
+)
 from trend import (
     DEFAULT_HALF_LIFE_DAYS,
     KCAL_PER_LB,
@@ -22,6 +33,7 @@ from trend import (
     parse_date,
     summary,
 )
+from vision import xai_status
 
 ROOT = Path(__file__).resolve().parent
 PUBLIC = ROOT / "public"
@@ -29,6 +41,14 @@ DATA_DIR = ROOT / "data"
 DB_PATH = Path(os.environ.get("HACKDIET_DB", DATA_DIR / "weights.db"))
 PORT = int(os.environ.get("PORT", "8510"))
 HOST = os.environ.get("HOST", "0.0.0.0")
+
+# Load secrets.env into process env early (XAI_API_KEY)
+try:
+    from vision import load_xai_credentials
+
+    load_xai_credentials()
+except Exception:
+    pass
 
 # last AI coach payload (in-memory; also mirrored to settings for reloads)
 _LAST_COACH: Optional[dict] = None
@@ -83,6 +103,7 @@ def init_db(conn: sqlite3.Connection) -> None:
 
 DB = connect()
 init_db(DB)
+ensure_photos_schema(DB)
 
 
 def _load_cached_coach() -> Optional[dict]:
@@ -267,10 +288,21 @@ class Handler(SimpleHTTPRequestHandler):
 
         try:
             if path == "/api/health":
-                return self._json(200, {"ok": True, "service": "hackers-diet"})
+                return self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "service": "hackers-diet",
+                        "xai": xai_status(),
+                        "kobold": kobold_status(),
+                    },
+                )
 
             if path == "/api/coach/status":
                 return self._json(200, kobold_status())
+
+            if path == "/api/vision/status":
+                return self._json(200, xai_status())
 
             if path == "/api/coach":
                 # return last cached pep talk if any
@@ -281,6 +313,23 @@ class Handler(SimpleHTTPRequestHandler):
                 s = all_settings()
                 s["kcal_per_lb"] = KCAL_PER_LB
                 return self._json(200, s)
+
+            if path == "/api/photos":
+                return self._json(200, {"photos": list_photos(DB)})
+
+            if path == "/api/photos/series":
+                return self._json(200, {"series": series_for_chart(DB)})
+
+            m = re.fullmatch(r"/api/photos/(\d+)/image", path)
+            if m:
+                return self._serve_photo_image(int(m.group(1)))
+
+            m = re.fullmatch(r"/api/photos/(\d+)", path)
+            if m:
+                photo = get_photo(DB, int(m.group(1)))
+                if not photo:
+                    return self._err(404, "not found")
+                return self._json(200, {"photo": photo})
 
             if path in ("/api/weights", "/api/trend", "/api/summary"):
                 half = None
@@ -300,6 +349,7 @@ class Handler(SimpleHTTPRequestHandler):
                         "kcal_per_lb": KCAL_PER_LB,
                         "summary": summ,
                         "series": series,
+                        "photo_series": series_for_chart(DB),
                     },
                 )
 
@@ -320,6 +370,11 @@ class Handler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/coach":
                 data = read_json(self)
                 return self._generate_coach(data)
+            if parsed.path == "/api/photos":
+                return self._create_photo()
+            m = re.fullmatch(r"/api/photos/(\d+)/analyze", parsed.path)
+            if m:
+                return self._reanalyze_photo(int(m.group(1)))
             return self._err(404, "not found")
         except Exception as e:
             traceback.print_exc()
@@ -347,6 +402,9 @@ class Handler(SimpleHTTPRequestHandler):
             m = re.fullmatch(r"/api/weights/(\d+)", parsed.path)
             if m:
                 return self._delete_weight(int(m.group(1)))
+            m = re.fullmatch(r"/api/photos/(\d+)", parsed.path)
+            if m:
+                return self._delete_photo(int(m.group(1)))
             return self._err(404, "not found")
         except Exception as e:
             traceback.print_exc()
@@ -452,6 +510,125 @@ class Handler(SimpleHTTPRequestHandler):
                 "deleted": wid,
                 "summary": attach_bmi({**summ, "half_life_days": half}),
                 "series": series,
+            },
+        )
+
+    def _serve_photo_image(self, pid: int) -> None:
+        try:
+            path, mime = photo_file_path(DB, DATA_DIR, pid)
+        except KeyError:
+            return self._err(404, "not found")
+        except FileNotFoundError:
+            return self._err(404, "image missing on disk")
+        data = path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "private, max-age=86400")
+        self._cors()
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _create_photo(self) -> None:
+        ctype = self.headers.get("Content-Type", "")
+        analyze = True
+        note = None
+        taken = date.today().isoformat()
+        image_bytes = None
+        mime = "image/jpeg"
+
+        if ctype.startswith("multipart/form-data"):
+            parts = parse_multipart(self)
+            fields = parts["fields"]
+            image_bytes = parts["file_bytes"]
+            mime = parts.get("mime") or mime
+            if fields.get("date"):
+                taken = fields["date"]
+            if fields.get("note") is not None:
+                note = fields.get("note") or None
+            if fields.get("analyze") in ("0", "false", "False"):
+                analyze = False
+        else:
+            data = read_json(self)
+            taken = data.get("date") or taken
+            note = data.get("note")
+            analyze = data.get("analyze", True)
+            b64 = data.get("image_base64") or data.get("image")
+            if not b64:
+                return self._err(400, "image required (multipart file or image_base64)")
+            if "," in b64 and b64.strip().startswith("data:"):
+                header, b64 = b64.split(",", 1)
+                if "image/png" in header:
+                    mime = "image/png"
+            import base64
+
+            try:
+                image_bytes = base64.b64decode(b64)
+            except Exception:
+                return self._err(400, "invalid base64 image")
+            if data.get("mime"):
+                mime = data["mime"]
+
+        if not image_bytes:
+            return self._err(400, "empty image")
+        if len(image_bytes) > 18 * 1024 * 1024:
+            return self._err(400, "image too large (max ~18MB)")
+
+        try:
+            photo = create_photo(
+                DB,
+                DATA_DIR,
+                image_bytes=image_bytes,
+                mime=mime,
+                taken_date=taken,
+                note=note,
+                now_iso=utc_now_iso(),
+                analyze=bool(analyze),
+            )
+        except Exception as e:
+            traceback.print_exc()
+            return self._err(502, str(e))
+
+        return self._json(
+            201,
+            {
+                "photo": photo,
+                "photos": list_photos(DB),
+                "photo_series": series_for_chart(DB),
+                "xai": xai_status(),
+            },
+        )
+
+    def _reanalyze_photo(self, pid: int) -> None:
+        try:
+            photo = reanalyze_photo(DB, DATA_DIR, pid, utc_now_iso())
+        except KeyError:
+            return self._err(404, "not found")
+        except FileNotFoundError:
+            return self._err(404, "image missing on disk")
+        except Exception as e:
+            traceback.print_exc()
+            return self._err(502, str(e))
+        return self._json(
+            200,
+            {
+                "photo": photo,
+                "photos": list_photos(DB),
+                "photo_series": series_for_chart(DB),
+            },
+        )
+
+    def _delete_photo(self, pid: int) -> None:
+        try:
+            delete_photo(DB, DATA_DIR, pid)
+        except KeyError:
+            return self._err(404, "not found")
+        return self._json(
+            200,
+            {
+                "deleted": pid,
+                "photos": list_photos(DB),
+                "photo_series": series_for_chart(DB),
             },
         )
 

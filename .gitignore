@@ -22,3 +22,7 @@ venv/
 
 # ESP32 local secrets (copy from config.example.h)
 esp32/**/config.h
+
+secrets.env
+secrets.php
+.env

@@ -88,6 +88,11 @@
     settings = sets;
     series = trend.series || [];
     summary = trend.summary || {};
+    if (window.hackDietPhotos) {
+      if (trend.photo_series) window.hackDietPhotos.setPhotoSeries(trend.photo_series);
+      const bmi = summary.bmi?.bmi;
+      if (bmi != null) window.hackDietPhotos.setScaleBmi(bmi);
+    }
     render();
   }
 
@@ -713,6 +718,7 @@
       }
       if (bar) bar.hidden = false;
       if (marker) marker.style.left = bmiMarkerPct(bmi.bmi) + "%";
+      if (window.hackDietPhotos) window.hackDietPhotos.setScaleBmi(bmi.bmi);
     } else {
       bmiEl.textContent = "—";
       bmiEl.className = "stat-value";

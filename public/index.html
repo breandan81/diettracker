@@ -9,7 +9,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-  <link rel="stylesheet" href="/style.css?v=4" />
+  <link rel="stylesheet" href="/style.css?v=6" />
 </head>
 <body class="mood-idle" id="body-mood">
   <div id="fx-layer" aria-hidden="true"></div>
@@ -22,10 +22,15 @@
         <h1>Hacker's Diet</h1>
       </div>
     </div>
-    <p class="tagline">Time-aware EMA trend · gap-tolerant · kcal from slope</p>
+    <nav class="view-tabs" id="view-tabs">
+      <button type="button" class="view-tab active" data-view="tracker">Tracker</button>
+      <button type="button" class="view-tab" data-view="photos">Photos</button>
+    </nav>
+    <p class="tagline">Time-aware EMA trend · gap-tolerant · kcal from slope · Grok photo ratings</p>
   </header>
 
   <main>
+  <div id="view-tracker">
     <!-- Motivational coach banner -->
     <section class="coach panel" id="coach" data-mood="idle">
       <div class="coach-art" aria-hidden="true">
@@ -180,6 +185,17 @@
       <p class="hint">Dots = raw scale weight. Line = time-based EMA (half-life). Gaps don't break the model — longer gaps put more weight on the next weigh-in.</p>
     </section>
 
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Visual ratings</h2>
+        <span class="pill" id="xai-pill" title="xAI vision">Vision …</span>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="chart-visual" height="120"></canvas>
+      </div>
+      <p class="hint">Grok appearance score (1–10) and visual BMI estimate from progress photos — vs scale BMI when height is set. Upload in the <button type="button" class="linkish jump-photos">Photos</button> view.</p>
+    </section>
+
     <section class="two-col">
       <div class="panel">
         <h2>Settings</h2>
@@ -240,11 +256,77 @@
         </div>
       </div>
     </section>
+  </div><!-- /view-tracker -->
+
+  <div id="view-photos" hidden>
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Log progress photo</h2>
+        <span class="pill" id="xai-pill-2">Vision …</span>
+      </div>
+      <form id="photo-form" class="photo-form">
+        <label>
+          <span>Date</span>
+          <input type="date" id="p-date" required />
+        </label>
+        <label class="grow">
+          <span>Photo (jpeg/png)</span>
+          <input type="file" id="p-file" accept="image/jpeg,image/png,image/jpg" required />
+        </label>
+        <label class="grow">
+          <span>Note <em class="muted">(optional)</em></span>
+          <input type="text" id="p-note" maxlength="200" placeholder="morning, lighting, …" />
+        </label>
+        <label class="check">
+          <input type="checkbox" id="p-analyze" checked />
+          <span>Analyze with Grok</span>
+        </label>
+        <button type="submit" class="btn primary" id="p-submit">Upload</button>
+      </form>
+      <p class="hint" id="photo-msg" hidden></p>
+      <div class="photo-preview" id="photo-preview" hidden>
+        <img id="photo-preview-img" alt="preview" />
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Gallery</h2>
+        <span class="muted small" id="photo-count">0 photos</span>
+      </div>
+      <div class="gallery" id="gallery">
+        <p class="empty">No photos yet — upload one above.</p>
+      </div>
+    </section>
+  </div><!-- /view-photos -->
+
   </main>
 
   <footer>
-    Local only · SQLite on this host · 3500 kcal ≈ 1 lb body fat
+    Local only · SQLite on this host · 3500 kcal ≈ 1 lb body fat · photos via xAI Grok
   </footer>
+
+  <dialog id="photo-dialog">
+    <div class="photo-dialog-body">
+      <img id="pd-img" alt="progress photo" />
+      <div class="photo-dialog-meta">
+        <h3 id="pd-title">Photo</h3>
+        <div class="pd-scores">
+          <div><span class="muted">Appearance</span><strong id="pd-score">—</strong></div>
+          <div><span class="muted">Visual BMI</span><strong id="pd-bmi">—</strong></div>
+          <div><span class="muted">Confidence</span><strong id="pd-conf">—</strong></div>
+        </div>
+        <p id="pd-just" class="pd-just"></p>
+        <pre id="pd-obs" class="pd-obs"></pre>
+        <div class="dialog-actions">
+          <button type="button" class="btn danger" id="pd-delete">Delete</button>
+          <button type="button" class="btn ghost" id="pd-reanalyze">Re-analyze</button>
+          <span class="grow"></span>
+          <button type="button" class="btn" id="pd-close">Close</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
 
   <dialog id="edit-dialog">
     <form method="dialog" id="edit-form" class="edit-form">
@@ -271,6 +353,7 @@
     </form>
   </dialog>
 
-  <script src="/app.js?v=5"></script>
+  <script src="/app.js?v=6"></script>
+  <script src="/photos-ui.js?v=6"></script>
 </body>
 </html>
