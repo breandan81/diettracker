@@ -1,0 +1,21 @@
+# Local runtime / personal data
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.env
+.secrets*
+
+# Editors / OS
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/

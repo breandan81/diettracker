@@ -1,0 +1,1075 @@
+/* Hacker's Diet — frontend */
+(() => {
+  const $ = (sel) => document.querySelector(sel);
+  const $$ = (sel) => [...document.querySelectorAll(sel)];
+
+  let series = [];
+  let summary = {};
+  let settings = {};
+  let range = "90";
+  let chart;
+  let lastMood = "idle";
+  let coachStyle = localStorage.getItem("hd_coach_style") || "pep";
+  let aiCoach = null; // last LLM coach payload
+  let aiPinned = false; // keep AI text until next generate
+  let koboldOk = false;
+
+  const MOOD_IMAGES = {
+    idle: "/img/mood-idle.jpg",
+    crushing: "/img/mood-crushing.jpg",
+    losing: "/img/mood-losing.jpg",
+    steady: "/img/mood-steady.jpg",
+    gaining: "/img/mood-gaining.jpg",
+    goal: "/img/mood-goal.jpg",
+  };
+  let currentMoodImg = "idle";
+
+  // Portal back-link: if served on :8510, point home at same host :80
+  (() => {
+    const a = $("#portal-link");
+    if (!a) return;
+    const host = location.hostname;
+    if (location.port && location.port !== "80" && location.port !== "") {
+      a.href = `${location.protocol}//${host}/`;
+    } else {
+      a.href = "/";
+    }
+  })();
+
+  function fmt(n, digits = 1) {
+    if (n == null || Number.isNaN(n)) return "—";
+    return Number(n).toFixed(digits);
+  }
+
+  function signClass(n) {
+    if (n == null || Number.isNaN(n) || Math.abs(n) < 1e-9) return "";
+    return n < 0 ? "loss" : "gain";
+  }
+
+  function todayISO() {
+    const d = new Date();
+    const off = d.getTimezoneOffset();
+    const local = new Date(d.getTime() - off * 60000);
+    return local.toISOString().slice(0, 10);
+  }
+
+  function daysBetweenISO(a, b) {
+    const da = new Date(a + "T12:00:00");
+    const db = new Date(b + "T12:00:00");
+    return Math.round((db - da) / 86400000);
+  }
+
+  async function api(path, opts = {}) {
+    const res = await fetch(path, {
+      headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+      ...opts,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || res.statusText || "request failed");
+    return data;
+  }
+
+  function applyState(payload) {
+    if (payload.series) series = payload.series;
+    if (payload.entries) series = payload.entries;
+    if (payload.summary) summary = payload.summary;
+    if (payload.settings) settings = payload.settings;
+    if (payload.half_life_days != null && summary) {
+      summary.half_life_days = payload.half_life_days;
+    }
+    render();
+  }
+
+  async function loadAll() {
+    const [trend, sets] = await Promise.all([
+      api("/api/trend"),
+      api("/api/settings"),
+    ]);
+    settings = sets;
+    series = trend.series || [];
+    summary = trend.summary || {};
+    render();
+  }
+
+  function render() {
+    renderStats();
+    renderCoach();
+    renderSettings();
+    renderTable();
+    renderChart();
+  }
+
+  async function refreshKoboldStatus() {
+    const pill = $("#kobold-pill");
+    try {
+      const st = await api("/api/coach/status");
+      koboldOk = !!st.ok;
+      if (!pill) return;
+      if (st.ok) {
+        const short = (st.model || "kobold").replace(/^koboldcpp\//, "");
+        pill.textContent = `LLM · ${short}`;
+        pill.title = `${st.model || "Kobold"} @ ${st.url || ""}`;
+        pill.className = "kobold-pill up";
+      } else {
+        pill.textContent = "LLM offline";
+        pill.title = st.error || "Kobold not reachable";
+        pill.className = "kobold-pill down";
+      }
+    } catch (e) {
+      koboldOk = false;
+      if (pill) {
+        pill.textContent = "LLM offline";
+        pill.title = e.message;
+        pill.className = "kobold-pill down";
+      }
+    }
+  }
+
+  async function loadCachedCoach() {
+    try {
+      const data = await api("/api/coach");
+      if (data.kobold) {
+        koboldOk = !!data.kobold.ok;
+        const pill = $("#kobold-pill");
+        if (pill && data.kobold.ok) {
+          const short = (data.kobold.model || "kobold").replace(/^koboldcpp\//, "");
+          pill.textContent = `LLM · ${short}`;
+          pill.className = "kobold-pill up";
+        }
+      }
+      if (data.coach && data.coach.title) {
+        aiCoach = data.coach;
+        aiPinned = true;
+      }
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  async function requestPepTalk(opts = {}) {
+    const btn = $("#btn-pep");
+    const label = $("#btn-pep-label");
+    if (btn) btn.classList.add("busy");
+    if (label) label.textContent = "Thinking";
+    try {
+      const data = await api("/api/coach", {
+        method: "POST",
+        body: JSON.stringify({ style: coachStyle }),
+      });
+      aiCoach = data.coach;
+      aiPinned = true;
+      applyAiCoachToDom(true);
+      if (opts.celebrate !== false && aiCoach?.toast) {
+        burstFX(aiCoach.toast);
+      }
+      return aiCoach;
+    } catch (e) {
+      const msg = $("#form-msg");
+      if (msg) {
+        msg.textContent = "Kobold coach failed: " + e.message;
+        msg.className = "hint err";
+        msg.hidden = false;
+      } else {
+        alert("Kobold coach failed: " + e.message);
+      }
+      await refreshKoboldStatus();
+      throw e;
+    } finally {
+      if (btn) btn.classList.remove("busy");
+      if (label) label.textContent = "Pep talk";
+    }
+  }
+
+  function applyAiCoachToDom(force) {
+    if (!aiCoach || (!aiPinned && !force)) return;
+    if (aiCoach.badge) $("#mood-badge").textContent = aiCoach.badge;
+    if (aiCoach.title) $("#coach-title").textContent = aiCoach.title;
+    if (aiCoach.message) {
+      const el = $("#coach-msg");
+      el.textContent = aiCoach.message;
+      el.classList.add("ai-sourced");
+    }
+    const meta = $("#coach-meta");
+    if (meta) {
+      const bits = [];
+      if (aiCoach.style) bits.push(aiCoach.style);
+      if (aiCoach.model) bits.push(String(aiCoach.model).replace(/^koboldcpp\//, ""));
+      if (aiCoach.generated_at) {
+        bits.push(String(aiCoach.generated_at).replace("T", " ").replace("+00:00", "Z"));
+      }
+      meta.textContent = bits.length ? "via Kobold · " + bits.join(" · ") : "";
+      meta.hidden = !bits.length;
+    }
+  }
+
+  // ---- motivation / mood ----
+
+  function computeMood() {
+    const s = summary || {};
+    const goal = settings.goal_weight;
+    const trend = s.trend;
+    const rate = s.rate_lb_per_day;
+    const count = s.count || 0;
+
+    if (!count || trend == null) {
+      return {
+        mood: "idle",
+        badge: "STAND BY",
+        title: "Ready when you are",
+        msg: "Log a weigh-in to wake the signal processor. Gaps are fine — the EMA half-life has your back.",
+        progress: 0,
+        atGoal: false,
+      };
+    }
+
+    let atGoal = false;
+
+    // progress toward goal if we know a starting point
+    let progress = 0;
+    let lbLeft = null;
+    let etaDays = null;
+    if (goal != null && goal !== "" && series.length >= 1) {
+      const start = series[0].trend ?? series[0].weight;
+      const span = start - goal;
+      if (Math.abs(span) > 0.05) {
+        // works for lose-weight goals (start > goal) and gain goals
+        progress = ((start - trend) / span) * 100;
+        progress = Math.max(0, Math.min(100, progress));
+      }
+      lbLeft = trend - goal;
+      if (rate != null && Math.abs(rate) > 1e-6) {
+        // days until trend hits goal if current rate continues
+        const need = goal - trend; // negative if need to lose
+        if ((need < 0 && rate < 0) || (need > 0 && rate > 0)) {
+          etaDays = Math.abs(need / rate);
+        }
+      }
+      // at goal if trend is at or past the goal in the intended direction
+      if (Math.abs(trend - goal) < 0.15) {
+        progress = 100;
+        atGoal = true;
+      } else if (span > 0 && trend <= goal) {
+        // losing toward lower goal and overshot
+        progress = 100;
+        atGoal = true;
+      } else if (span < 0 && trend >= goal) {
+        progress = 100;
+        atGoal = true;
+      }
+    }
+
+    if (atGoal) {
+      return {
+        mood: "goal",
+        badge: "GOAL REACHED",
+        title: pick([
+          "You made it to the summit!",
+          "Flag planted. Absolute legend.",
+          "Target acquired. Trend locked.",
+        ]),
+        msg: pick([
+          "Maintain with small corrections — that's the whole Hacker's Diet trick. Don't celebrate with a surplus (unless you want to).",
+          "The hard part is staying here. Watch the trend, not the daily noise.",
+        ]),
+        progress: 100,
+        atGoal: true,
+        lbLeft: 0,
+        etaDays: 0,
+      };
+    }
+
+    // rate thresholds (lb/day)
+    let mood = "steady";
+    if (rate != null) {
+      if (rate <= -0.15) mood = "crushing"; // ~1+ lb/wk loss
+      else if (rate <= -0.03) mood = "losing";
+      else if (rate >= 0.05) mood = "gaining";
+      else mood = "steady";
+    }
+
+    const kcal = s.kcal_per_day;
+    const lines = moodCopy(mood, { rate, kcal, lbLeft, etaDays, progress, goal });
+    return {
+      mood,
+      ...lines,
+      progress,
+      atGoal: false,
+      lbLeft,
+      etaDays,
+    };
+  }
+
+  function pick(arr) {
+    return arr[Math.floor(Math.random() * arr.length)];
+  }
+
+  // Stable pick from string so UI doesn't flicker every render
+  function pickStable(arr, key) {
+    let h = 0;
+    const s = String(key);
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return arr[h % arr.length];
+  }
+
+  function moodCopy(mood, ctx) {
+    const rateW = ctx.rate != null ? fmt(ctx.rate * 7, 2) : "—";
+    const kcal = ctx.kcal != null ? Math.round(ctx.kcal) : null;
+    const left =
+      ctx.lbLeft != null ? `${fmt(Math.abs(ctx.lbLeft), 1)} lb` : null;
+    const eta =
+      ctx.etaDays != null && ctx.etaDays < 400
+        ? ctx.etaDays < 2
+          ? "about a day"
+          : `~${Math.round(ctx.etaDays)} days`
+        : null;
+
+    if (mood === "crushing") {
+      return {
+        badge: "ROCKET MODE",
+        title: pickStable(
+          ["Trend is diving — keep the fire.", "Fat cells filing complaints.", "Throttle wide open."],
+          summary.latest_date + "c"
+        ),
+        msg:
+          (kcal != null
+            ? `Estimated ${Math.abs(kcal)} kcal/day deficit · ${rateW} lb/wk. `
+            : "") +
+          (left && eta
+            ? `${left} to goal at this pace (${eta}).`
+            : left
+              ? `${left} to goal.`
+              : "The EMA is buying what you're selling."),
+      };
+    }
+    if (mood === "losing") {
+      return {
+        badge: "ON TRAIL",
+        title: pickStable(
+          ["Steady climb. Signal is green.", "The slope is your friend.", "Quiet progress — perfect."],
+          summary.latest_date + "l"
+        ),
+        msg:
+          (kcal != null
+            ? `~${Math.abs(kcal)} kcal/day deficit · ${rateW} lb/wk. `
+            : "") +
+          (left && eta
+            ? `${left} to go · ETA ${eta} if you hold the line.`
+            : "Ignore day-to-day bounce. Trust the trend line."),
+      };
+    }
+    if (mood === "gaining") {
+      return {
+        badge: "COURSE CORRECT",
+        title: pickStable(
+          ["Trend drifting up — small nudge time.", "Noise or signal? Probably signal.", "Recalibrate the intake."],
+          summary.latest_date + "g"
+        ),
+        msg:
+          (kcal != null && kcal > 0
+            ? `~${kcal} kcal/day surplus · ${rateW} lb/wk. `
+            : "") +
+          "No panic — that's why we smooth. Trim a bit or move a bit; re-check in a few weigh-ins.",
+      };
+    }
+    // steady
+    return {
+      badge: "HOLDING PATTERN",
+      title: pickStable(
+        ["Weight stable. Control system online.", "Maintenance mode engaged.", "Flat trend — pure equilibrium."],
+        summary.latest_date + "s"
+      ),
+      msg:
+        "You're near energy balance. To lose, open a modest deficit; to hold, stay the course. The chart doesn't lie (slowly).",
+    };
+  }
+
+  function weighInStreak() {
+    if (!series.length) return 0;
+    // count distinct dates going backward, allowing 1-day gaps as "on cadence"
+    // streak = consecutive calendar days with a weigh-in ending at latest
+    const dates = [...new Set(series.map((e) => e.date))].sort();
+    if (!dates.length) return 0;
+    let streak = 1;
+    for (let i = dates.length - 1; i > 0; i--) {
+      const gap = daysBetweenISO(dates[i - 1], dates[i]);
+      if (gap === 1) streak++;
+      else if (gap === 2) streak++; // every-other-day still counts as engaged
+      else break;
+    }
+    return streak;
+  }
+
+  function longestGapDays() {
+    if (series.length < 2) return 0;
+    let max = 0;
+    for (let i = 1; i < series.length; i++) {
+      const g = daysBetweenISO(series[i - 1].date, series[i].date);
+      if (g > max) max = g;
+    }
+    return max;
+  }
+
+  function netLost() {
+    if (series.length < 2) return 0;
+    const a = series[0].trend ?? series[0].weight;
+    const b = series[series.length - 1].trend ?? series[series.length - 1].weight;
+    return a - b; // positive = lost
+  }
+
+  function setMoodImage(mood) {
+    const img = $("#mood-img");
+    const frame = $("#mood-frame");
+    if (!img) return;
+    const key = MOOD_IMAGES[mood] ? mood : "idle";
+    const src = MOOD_IMAGES[key];
+    if (key === currentMoodImg && img.getAttribute("src") === src) return;
+    currentMoodImg = key;
+    if (frame) frame.classList.add("swap");
+    const next = new Image();
+    next.onload = () => {
+      img.src = src;
+      requestAnimationFrame(() => {
+        if (frame) frame.classList.remove("swap");
+      });
+    };
+    next.onerror = () => {
+      img.src = MOOD_IMAGES.idle;
+      if (frame) frame.classList.remove("swap");
+    };
+    next.src = src;
+  }
+
+  function renderCoach() {
+    const coach = $("#coach");
+    if (!coach) return;
+    const info = computeMood();
+    const prev = lastMood;
+    lastMood = info.mood;
+
+    coach.dataset.mood = info.mood;
+    document.body.className = "mood-" + info.mood;
+
+    // Rule-based copy unless an AI pep talk is pinned
+    if (aiPinned && aiCoach) {
+      applyAiCoachToDom(true);
+    } else {
+      $("#mood-badge").textContent = info.badge;
+      $("#coach-title").textContent = info.title;
+      const msgEl = $("#coach-msg");
+      msgEl.textContent = info.msg;
+      msgEl.classList.remove("ai-sourced");
+      const meta = $("#coach-meta");
+      if (meta) meta.hidden = true;
+    }
+
+    // goal meter
+    const goal = settings.goal_weight;
+    const fill = $("#goal-fill");
+    const marker = $("#goal-you");
+    const pct = info.progress || 0;
+    fill.style.width = pct + "%";
+    marker.style.left = pct + "%";
+
+    const chip = $("#progress-chip");
+    if (goal == null || goal === "") {
+      $("#goal-pct-label").textContent = "set a goal →";
+      $("#goal-left").textContent = "no goal set";
+      $("#goal-eta").textContent = "settings below";
+      if (chip) chip.hidden = true;
+    } else {
+      $("#goal-pct-label").textContent = `${fmt(pct, 0)}%`;
+      if (info.atGoal) {
+        $("#goal-left").textContent = "at goal";
+        $("#goal-eta").textContent = "maintain ✨";
+      } else if (info.lbLeft != null) {
+        const dir = info.lbLeft > 0 ? "to lose" : "to gain";
+        $("#goal-left").textContent = `${fmt(Math.abs(info.lbLeft), 1)} lb ${dir}`;
+        $("#goal-eta").textContent =
+          info.etaDays != null && info.etaDays < 500
+            ? `ETA ~${Math.round(info.etaDays)}d`
+            : "ETA —";
+      }
+      if (chip) {
+        chip.hidden = false;
+        $("#progress-chip-pct").textContent = `${fmt(pct, 0)}%`;
+      }
+    }
+
+    setMoodImage(info.mood);
+
+    // Fat-burn throttle: RIGHT = more burn (red).
+    // App kcal is negative for deficit; invert so burn increases to the right.
+    // Examples: -1000 kcal → left 95% (red); 0 → 50%; +1000 → 5% (blue).
+    const kcal = summary.kcal_per_day;
+    const needle = $("#throttle-needle");
+    const tLabel = $("#throttle-label");
+    if (!needle) {
+      /* no-op */
+    } else if (kcal == null || summary.count === 0) {
+      needle.style.left = "50%";
+      if (tLabel) tLabel.textContent = "idle";
+    } else {
+      const k = Number(kcal);
+      const burn = -k; // positive burn when kcal deficit
+      const clampedBurn = Math.max(-1000, Math.min(1000, burn));
+      const leftPct = 50 + (clampedBurn / 1000) * 45;
+      needle.style.left = leftPct + "%";
+      needle.style.transform = "";
+      if (tLabel) {
+        if (k < -50) tLabel.textContent = `${Math.round(k)} · burning`;
+        else if (k > 50) tLabel.textContent = `+${Math.round(k)} · storing`;
+        else tLabel.textContent = `${Math.round(k)} · balanced`;
+      }
+    }
+
+    // badges
+    const streak = weighInStreak();
+    const lost = netLost();
+    const gap = longestGapDays();
+    const badges = [];
+
+    badges.push({
+      ico: "📅",
+      text: streak >= 2 ? `${streak}-day log streak` : "start a streak",
+      cls: streak >= 3 ? "on" : streak >= 1 ? "" : "dim",
+    });
+    if (lost > 0.3) {
+      badges.push({
+        ico: "📉",
+        text: `${fmt(lost, 1)} lb off the trend`,
+        cls: "on",
+      });
+    } else if (lost < -0.3) {
+      badges.push({
+        ico: "📈",
+        text: `+${fmt(-lost, 1)} lb on the trend`,
+        cls: "hot",
+      });
+    } else if (series.length >= 2) {
+      badges.push({ ico: "➖", text: "trend flat", cls: "" });
+    }
+    if (summary.count >= 7) {
+      badges.push({ ico: "🔬", text: `${summary.count} samples`, cls: "on" });
+    } else if (summary.count > 0) {
+      badges.push({
+        ico: "🔬",
+        text: `${summary.count}/7 samples to trust the slope`,
+        cls: summary.count >= 4 ? "" : "dim",
+      });
+    }
+    if (gap >= 5) {
+      badges.push({
+        ico: "🕳️",
+        text: `survived ${gap}d gap`,
+        cls: "on",
+      });
+    }
+    if (info.mood === "crushing") {
+      badges.push({ ico: "🚀", text: "rocket deficit", cls: "on" });
+    }
+    if (info.mood === "goal") {
+      badges.push({ ico: "🏆", text: "summit", cls: "hot" });
+    }
+
+    $("#badges").innerHTML = badges
+      .map(
+        (b) =>
+          `<span class="badge ${b.cls}"><span class="ico">${b.ico}</span>${b.text}</span>`
+      )
+      .join("");
+
+    // celebrate mood upgrades
+    if (
+      (info.mood === "crushing" && prev !== "crushing" && prev !== "idle") ||
+      (info.mood === "goal" && prev !== "goal")
+    ) {
+      burstFX(info.mood === "goal" ? "🏆 SUMMIT!" : "🚀 TREND ON FIRE");
+    }
+  }
+
+  function burstFX(toastText) {
+    const layer = $("#fx-layer");
+    if (!layer) return;
+    const colors = ["#7dd3a0", "#5b9fd4", "#e0a85c", "#e07070", "#cfe6ff", "#cc99cc"];
+    const cx = window.innerWidth / 2;
+    const cy = window.innerHeight * 0.28;
+    for (let i = 0; i < 36; i++) {
+      const el = document.createElement("div");
+      el.className = "fx-bit";
+      const angle = (Math.PI * 2 * i) / 36 + Math.random() * 0.4;
+      const dist = 80 + Math.random() * 160;
+      el.style.left = cx + "px";
+      el.style.top = cy + "px";
+      el.style.background = colors[i % colors.length];
+      el.style.setProperty("--dx", Math.cos(angle) * dist + "px");
+      el.style.setProperty("--dy", Math.sin(angle) * dist + "px");
+      el.style.setProperty("--rot", 200 + Math.random() * 400 + "deg");
+      el.style.width = 6 + Math.random() * 8 + "px";
+      el.style.height = 6 + Math.random() * 8 + "px";
+      el.style.borderRadius = Math.random() > 0.5 ? "50%" : "2px";
+      layer.appendChild(el);
+      setTimeout(() => el.remove(), 1300);
+    }
+    if (toastText) {
+      const t = document.createElement("div");
+      t.className = "fx-toast";
+      t.textContent = toastText;
+      layer.appendChild(t);
+      setTimeout(() => t.remove(), 1500);
+    }
+  }
+
+  function celebrateLog(data) {
+    const kcal = data.summary?.kcal_per_day;
+    const rate = data.summary?.rate_lb_per_day;
+    if (rate != null && rate < -0.03) {
+      burstFX(pick(["✦ LOGGED", "📉 TREND LIKES THIS", "⚡ SIGNAL UPDATED"]));
+    } else if (series.length === 1 || (data.summary?.count === 1)) {
+      burstFX("✦ FIRST SAMPLE");
+    } else {
+      // subtle sparkle only
+      const layer = $("#fx-layer");
+      if (!layer) return;
+      for (let i = 0; i < 10; i++) {
+        const el = document.createElement("div");
+        el.className = "fx-bit";
+        el.style.left = window.innerWidth / 2 + (Math.random() - 0.5) * 120 + "px";
+        el.style.top = "30%" ;
+        el.style.background = "#5b9fd4";
+        el.style.setProperty("--dx", (Math.random() - 0.5) * 80 + "px");
+        el.style.setProperty("--dy", -(40 + Math.random() * 60) + "px");
+        el.style.setProperty("--rot", "180deg");
+        layer.appendChild(el);
+        setTimeout(() => el.remove(), 1200);
+      }
+    }
+  }
+
+  function bmiMarkerPct(bmi) {
+    // Bar is 4 equal-width category bands. Map BMI into the matching band
+    // so 29.1 (near top of overweight) sits near the right edge of that band,
+    // not the left (which a linear 15–40 scale wrongly did).
+    //   under:  <18.5  →  0–25%   (use 15–18.5 for travel inside band)
+    //   normal: 18.5–25 → 25–50%
+    //   over:   25–30   → 50–75%
+    //   obese:  ≥30     → 75–100% (use 30–40 for travel inside band)
+    const v = Number(bmi);
+    if (!Number.isFinite(v)) return 0;
+    const band = (lo, hi, startPct) => {
+      const t = (v - lo) / (hi - lo);
+      return startPct + Math.max(0, Math.min(1, t)) * 25;
+    };
+    if (v < 18.5) return band(15, 18.5, 0);
+    if (v < 25) return band(18.5, 25, 25);
+    if (v < 30) return band(25, 30, 50);
+    return band(30, 40, 75);
+  }
+
+  function renderStats() {
+    const s = summary || {};
+    $("#s-trend").textContent =
+      s.trend != null ? `${fmt(s.trend, 1)} lb` : "—";
+    $("#s-raw").textContent =
+      s.latest_weight != null
+        ? `last weigh-in ${fmt(s.latest_weight, 1)} lb · ${s.latest_date || ""} · ${s.count || 0} logs`
+        : "no weigh-ins yet";
+
+    const rWeek = s.rate_lb_per_week;
+    const rateEl = $("#s-rate");
+    rateEl.textContent = rWeek != null ? `${fmt(rWeek, 2)} lb/wk` : "—";
+    rateEl.className = "stat-value " + signClass(rWeek);
+    $("#s-rate-day").textContent =
+      s.rate_lb_per_day != null
+        ? `${fmt(s.rate_lb_per_day, 3)} lb/day`
+        : "— lb/day";
+
+    const kcal = s.kcal_per_day;
+    const kEl = $("#s-kcal");
+    if (kcal == null) {
+      kEl.textContent = "—";
+      kEl.className = "stat-value";
+    } else {
+      const label = kcal < -1 ? "deficit" : kcal > 1 ? "surplus" : "balanced";
+      kEl.textContent = `${kcal > 0 ? "+" : ""}${fmt(kcal, 0)}`;
+      kEl.className = "stat-value " + signClass(kcal);
+      kEl.title = `${label} · est. from trend slope`;
+    }
+
+    // BMI tile (from trend weight + height setting)
+    const bmiEl = $("#s-bmi");
+    const catEl = $("#s-bmi-cat");
+    const rangeEl = $("#s-bmi-range");
+    const bar = $("#bmi-bar");
+    const marker = $("#bmi-marker");
+    const bmi = s.bmi;
+    if (bmi && bmi.bmi != null) {
+      bmiEl.textContent = fmt(bmi.bmi, 1);
+      bmiEl.className = "stat-value bmi-" + (bmi.category_key || "normal");
+      catEl.textContent = `${bmi.category} · ${bmi.height_label || ""}`;
+      if (bmi.healthy_weight_lb) {
+        rangeEl.textContent = `healthy ${fmt(bmi.healthy_weight_lb.low, 0)}–${fmt(bmi.healthy_weight_lb.high, 0)} lb`;
+      } else {
+        rangeEl.textContent = "";
+      }
+      if (bar) bar.hidden = false;
+      if (marker) marker.style.left = bmiMarkerPct(bmi.bmi) + "%";
+    } else {
+      bmiEl.textContent = "—";
+      bmiEl.className = "stat-value";
+      catEl.textContent = "set height in settings";
+      rangeEl.textContent = "";
+      if (bar) bar.hidden = true;
+    }
+  }
+
+  function heightPartsFromInches(total) {
+    if (total == null || total === "") return { ft: "", inch: "" };
+    const n = Number(total);
+    if (!Number.isFinite(n)) return { ft: "", inch: "" };
+    const ft = Math.floor(n / 12);
+    const inch = Math.round((n - ft * 12) * 2) / 2; // nearest 0.5
+    return { ft, inch };
+  }
+
+  function inchesFromParts(ft, inch) {
+    const f = parseFloat(ft);
+    const i = parseFloat(inch);
+    if (!Number.isFinite(f) && !Number.isFinite(i)) return null;
+    const ff = Number.isFinite(f) ? f : 0;
+    const ii = Number.isFinite(i) ? i : 0;
+    const total = ff * 12 + ii;
+    return total > 0 ? total : null;
+  }
+
+  function renderSettings() {
+    if (settings.half_life_days != null) {
+      $("#set-half").value = settings.half_life_days;
+    }
+    $("#set-goal").value =
+      settings.goal_weight != null && settings.goal_weight !== ""
+        ? settings.goal_weight
+        : "";
+    const parts = heightPartsFromInches(settings.height_in);
+    $("#set-height-ft").value = parts.ft;
+    $("#set-height-in").value = parts.inch;
+  }
+
+  function renderTable() {
+    const tbody = $("#hist tbody");
+    if (!series.length) {
+      tbody.innerHTML = `<tr><td colspan="7" class="empty">No entries yet — log a weight above.</td></tr>`;
+      return;
+    }
+    // newest first
+    const rows = [...series].reverse();
+    tbody.innerHTML = rows
+      .map((e) => {
+        const gap =
+          e.gap_days == null ? "—" : e.gap_days === 0 ? "0" : fmt(e.gap_days, 0);
+        const alpha = e.alpha == null ? "—" : fmt(e.alpha, 2);
+        const kcal =
+          e.kcal_per_day == null
+            ? "—"
+            : `${e.kcal_per_day > 0 ? "+" : ""}${fmt(e.kcal_per_day, 0)}`;
+        const kClass = signClass(e.kcal_per_day);
+        return `<tr data-id="${e.id}">
+          <td>${e.date}</td>
+          <td class="num">${fmt(e.weight, 1)}</td>
+          <td class="num">${fmt(e.trend, 2)}</td>
+          <td class="num">${gap}d</td>
+          <td class="num">${alpha}</td>
+          <td class="num ${kClass}">${kcal}</td>
+          <td><button type="button" class="linkish edit-btn" data-id="${e.id}">edit</button></td>
+        </tr>`;
+      })
+      .join("");
+  }
+
+  function filterSeriesByRange(all) {
+    if (range === "all" || !all.length) return all;
+    const days = parseInt(range, 10);
+    if (!days) return all;
+    const last = all[all.length - 1];
+    const end = new Date(last.date + "T12:00:00");
+    const start = new Date(end);
+    start.setDate(start.getDate() - days);
+    return all.filter((e) => new Date(e.date + "T12:00:00") >= start);
+  }
+
+  function renderChart() {
+    const ctx = $("#chart");
+    if (!ctx || typeof Chart === "undefined") return;
+
+    const data = filterSeriesByRange(series);
+    const raw = data.map((e) => ({ x: e.date, y: e.weight }));
+    const trend = data.map((e) => ({ x: e.date, y: e.trend }));
+
+    const goal = settings.goal_weight;
+    const datasets = [
+      {
+        label: "Raw",
+        data: raw,
+        showLine: false,
+        pointRadius: 4,
+        pointHoverRadius: 6,
+        backgroundColor: "rgba(224, 168, 92, 0.9)",
+        borderColor: "rgba(224, 168, 92, 0.9)",
+        order: 2,
+      },
+      {
+        label: "Trend (EMA)",
+        data: trend,
+        showLine: true,
+        pointRadius: 0,
+        borderWidth: 2.5,
+        borderColor: "rgba(91, 159, 212, 1)",
+        backgroundColor: "rgba(91, 159, 212, 0.15)",
+        tension: 0.15,
+        order: 1,
+      },
+    ];
+
+    if (goal != null && goal !== "" && data.length) {
+      datasets.push({
+        label: "Goal",
+        data: [
+          { x: data[0].date, y: goal },
+          { x: data[data.length - 1].date, y: goal },
+        ],
+        showLine: true,
+        pointRadius: 0,
+        borderWidth: 1.5,
+        borderDash: [6, 4],
+        borderColor: "rgba(125, 211, 160, 0.7)",
+        order: 0,
+      });
+    }
+
+    if (chart) {
+      chart.data.datasets = datasets;
+      chart.update("none");
+      return;
+    }
+
+    chart = new Chart(ctx, {
+      type: "line",
+      data: { datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "nearest", intersect: false, axis: "x" },
+        plugins: {
+          legend: {
+            labels: {
+              color: "#8b93a7",
+              font: { family: "'IBM Plex Mono', monospace", size: 11 },
+              boxWidth: 12,
+            },
+          },
+          tooltip: {
+            callbacks: {
+              label(ctx) {
+                const v = ctx.parsed.y;
+                return `${ctx.dataset.label}: ${Number(v).toFixed(2)} lb`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            type: "time",
+            time: { unit: "day", tooltipFormat: "yyyy-MM-dd" },
+            grid: { color: "rgba(120,160,220,0.08)" },
+            ticks: { color: "#8b93a7", maxRotation: 0, autoSkipPadding: 16 },
+          },
+          y: {
+            grid: { color: "rgba(120,160,220,0.08)" },
+            ticks: {
+              color: "#8b93a7",
+              callback: (v) => v + " lb",
+            },
+            title: { display: false },
+          },
+        },
+      },
+    });
+  }
+
+  // --- events ---
+
+  $("#log-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const msg = $("#form-msg");
+    msg.hidden = true;
+    const body = {
+      date: $("#f-date").value,
+      weight: parseFloat($("#f-weight").value),
+      note: $("#f-note").value || null,
+    };
+    try {
+      const data = await api("/api/weights", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      applyState(data);
+      $("#f-note").value = "";
+      msg.textContent = `Saved ${fmt(body.weight, 1)} lb on ${body.date}`;
+      msg.className = "hint ok";
+      msg.hidden = false;
+      // unpin old AI copy so rule-based mood can update, then optional auto-pep
+      aiPinned = false;
+      renderCoach();
+      celebrateLog(data);
+      if ($("#auto-pep")?.checked) {
+        requestPepTalk({ celebrate: true }).catch(() => {});
+      }
+    } catch (e) {
+      msg.textContent = e.message;
+      msg.className = "hint err";
+      msg.hidden = false;
+    }
+  });
+
+  $("#settings-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const half = parseFloat($("#set-half").value);
+    const goalRaw = $("#set-goal").value;
+    const heightIn = inchesFromParts(
+      $("#set-height-ft").value,
+      $("#set-height-in").value
+    );
+    const body = {
+      half_life_days: half,
+      goal_weight: goalRaw === "" ? null : parseFloat(goalRaw),
+      height_in: heightIn,
+    };
+    try {
+      const data = await api("/api/settings", {
+        method: "PUT",
+        body: JSON.stringify(body),
+      });
+      applyState(data);
+      settings = data.settings || settings;
+    } catch (e) {
+      alert(e.message);
+    }
+  });
+
+  $$("#range-tabs .tab").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      $$("#range-tabs .tab").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      range = btn.dataset.range;
+      renderChart();
+    });
+  });
+
+  $("#hist").addEventListener("click", (ev) => {
+    const btn = ev.target.closest(".edit-btn");
+    if (!btn) return;
+    const id = parseInt(btn.dataset.id, 10);
+    const entry = series.find((e) => e.id === id);
+    if (!entry) return;
+    $("#e-id").value = entry.id;
+    $("#e-date").value = entry.date;
+    $("#e-weight").value = entry.weight;
+    $("#e-note").value = entry.note || "";
+    $("#edit-dialog").showModal();
+  });
+
+  $("#e-cancel").addEventListener("click", () => $("#edit-dialog").close());
+
+  $("#edit-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const id = parseInt($("#e-id").value, 10);
+    const body = {
+      date: $("#e-date").value,
+      weight: parseFloat($("#e-weight").value),
+      note: $("#e-note").value || null,
+    };
+    try {
+      const data = await api(`/api/weights/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+      });
+      applyState(data);
+      $("#edit-dialog").close();
+    } catch (e) {
+      alert(e.message);
+    }
+  });
+
+  $("#e-delete").addEventListener("click", async () => {
+    const id = parseInt($("#e-id").value, 10);
+    if (!confirm("Delete this weigh-in?")) return;
+    try {
+      const data = await api(`/api/weights/${id}`, { method: "DELETE" });
+      applyState(data);
+      $("#edit-dialog").close();
+    } catch (e) {
+      alert(e.message);
+    }
+  });
+
+  $("#export-csv").addEventListener("click", () => {
+    const header = "date,weight_lb,trend_lb,gap_days,alpha,rate_lb_per_day,kcal_per_day,note\n";
+    const lines = series.map((e) =>
+      [
+        e.date,
+        e.weight,
+        e.trend,
+        e.gap_days,
+        e.alpha,
+        e.rate_lb_per_day,
+        e.kcal_per_day,
+        JSON.stringify(e.note || ""),
+      ].join(",")
+    );
+    const blob = new Blob([header + lines.join("\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `hackers-diet-${todayISO()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  // AI coach controls
+  $("#btn-pep")?.addEventListener("click", () => {
+    requestPepTalk().catch(() => {});
+  });
+
+  $$("#style-tabs .tab").forEach((btn) => {
+    if (btn.dataset.style === coachStyle) {
+      $$("#style-tabs .tab").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+    }
+    btn.addEventListener("click", () => {
+      $$("#style-tabs .tab").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      coachStyle = btn.dataset.style;
+      localStorage.setItem("hd_coach_style", coachStyle);
+    });
+  });
+
+  const autoPep = $("#auto-pep");
+  if (autoPep) {
+    autoPep.checked = localStorage.getItem("hd_auto_pep") === "1";
+    autoPep.addEventListener("change", () => {
+      localStorage.setItem("hd_auto_pep", autoPep.checked ? "1" : "0");
+    });
+  }
+
+  // init
+  $("#f-date").value = todayISO();
+  Promise.all([loadAll(), loadCachedCoach(), refreshKoboldStatus()])
+    .then(() => {
+      if (aiCoach) renderCoach();
+    })
+    .catch((e) => {
+      console.error(e);
+      $("#form-msg").textContent = "Failed to load: " + e.message;
+      $("#form-msg").className = "hint err";
+      $("#form-msg").hidden = false;
+    });
+})();

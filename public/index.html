@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hacker's Diet — Weight Trend</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+  <link rel="stylesheet" href="/style.css?v=4" />
+</head>
+<body class="mood-idle" id="body-mood">
+  <div id="fx-layer" aria-hidden="true"></div>
+
+  <header class="top">
+    <div class="brand">
+      <a class="back" href="/" id="portal-link" title="Tom Servo portal">← portal</a>
+      <div>
+        <div class="tag">signal processing · body mass</div>
+        <h1>Hacker's Diet</h1>
+      </div>
+    </div>
+    <p class="tagline">Time-aware EMA trend · gap-tolerant · kcal from slope</p>
+  </header>
+
+  <main>
+    <!-- Motivational coach banner -->
+    <section class="coach panel" id="coach" data-mood="idle">
+      <div class="coach-art" aria-hidden="true">
+        <div class="mood-frame" id="mood-frame">
+          <img
+            id="mood-img"
+            class="mood-img"
+            src="/img/mood-idle.jpg"
+            alt=""
+            width="512"
+            height="512"
+            decoding="async"
+          />
+          <div class="mood-glow" id="mood-glow"></div>
+          <div class="progress-chip" id="progress-chip" hidden>
+            <span id="progress-chip-pct">0%</span>
+            <span class="chip-label">to goal</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="coach-copy">
+        <div class="coach-top">
+          <div class="mood-badge" id="mood-badge">STAND BY</div>
+          <div class="kobold-pill" id="kobold-pill" title="Local KoboldCPP">LLM …</div>
+        </div>
+        <h2 class="coach-title" id="coach-title">Ready when you are</h2>
+        <p class="coach-msg" id="coach-msg">Log a weigh-in to wake the signal processor. Gaps are fine — the EMA half-life has your back.</p>
+        <p class="coach-meta" id="coach-meta" hidden></p>
+
+        <div class="ai-bar">
+          <button type="button" class="btn primary" id="btn-pep" title="Generate via local KoboldCPP">
+            <span class="btn-spark" aria-hidden="true">✦</span>
+            <span id="btn-pep-label">Pep talk</span>
+          </button>
+          <div class="style-tabs" id="style-tabs">
+            <button type="button" class="tab active" data-style="pep">pep</button>
+            <button type="button" class="tab" data-style="roast">roast</button>
+            <button type="button" class="tab" data-style="haiku">haiku</button>
+            <button type="button" class="tab" data-style="brief">brief</button>
+          </div>
+          <label class="auto-pep" title="Generate after each save">
+            <input type="checkbox" id="auto-pep" />
+            <span>auto on save</span>
+          </label>
+        </div>
+
+        <div class="coach-meters">
+          <div class="meter">
+            <div class="meter-head">
+              <span>Goal progress</span>
+              <span id="goal-pct-label">set a goal →</span>
+            </div>
+            <div class="meter-track">
+              <div class="meter-fill goal-fill" id="goal-fill" style="width:0%"></div>
+              <div class="meter-marker" id="goal-you" style="left:0%" title="you"></div>
+            </div>
+            <div class="meter-foot">
+              <span id="goal-left">—</span>
+              <span id="goal-eta">—</span>
+            </div>
+          </div>
+
+          <div class="meter">
+            <div class="meter-head">
+              <span>Fat-burn throttle</span>
+              <span id="throttle-label">idle</span>
+            </div>
+            <div class="throttle" id="throttle" aria-hidden="true">
+              <div class="throttle-ticks">
+                <span></span><span></span><span></span><span></span><span></span>
+                <span></span><span></span><span></span><span></span><span></span>
+              </div>
+              <div class="throttle-needle" id="throttle-needle"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="badges" id="badges">
+          <!-- filled by JS -->
+        </div>
+      </div>
+    </section>
+
+    <section class="stats" id="stats">
+      <div class="stat">
+        <div class="stat-label">Trend weight</div>
+        <div class="stat-value" id="s-trend">—</div>
+        <div class="stat-sub" id="s-raw">last weigh-in —</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Rate</div>
+        <div class="stat-value" id="s-rate">—</div>
+        <div class="stat-sub" id="s-rate-day">— lb/day</div>
+      </div>
+      <div class="stat accent">
+        <div class="stat-label">Est. energy balance</div>
+        <div class="stat-value" id="s-kcal">—</div>
+        <div class="stat-sub">kcal/day (from trend slope)</div>
+      </div>
+      <div class="stat" id="stat-bmi">
+        <div class="stat-label">BMI</div>
+        <div class="stat-value" id="s-bmi">—</div>
+        <div class="stat-sub" id="s-bmi-cat">set height in settings</div>
+        <div class="bmi-bar" id="bmi-bar" hidden>
+          <div class="bmi-seg under" title="Underweight &lt;18.5"></div>
+          <div class="bmi-seg normal" title="Normal 18.5–24.9"></div>
+          <div class="bmi-seg over" title="Overweight 25–29.9"></div>
+          <div class="bmi-seg obese" title="Obese ≥30"></div>
+          <div class="bmi-marker" id="bmi-marker"></div>
+        </div>
+        <div class="stat-sub" id="s-bmi-range"></div>
+      </div>
+    </section>
+
+    <section class="panel log-panel">
+      <h2>Log weight</h2>
+      <form id="log-form" class="log-form">
+        <label>
+          <span>Date</span>
+          <input type="date" id="f-date" required />
+        </label>
+        <label>
+          <span>Weight (lb)</span>
+          <input type="number" id="f-weight" step="0.1" min="50" max="500" placeholder="185.2" required />
+        </label>
+        <label class="grow">
+          <span>Note <em class="muted">(optional)</em></span>
+          <input type="text" id="f-note" maxlength="200" placeholder="after travel, morning, …" />
+        </label>
+        <button type="submit" class="btn primary" id="save-btn">
+          <span class="btn-spark" aria-hidden="true">✦</span> Save
+        </button>
+      </form>
+      <p class="hint" id="form-msg" hidden></p>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Trend chart</h2>
+        <div class="range-tabs" id="range-tabs">
+          <button type="button" data-range="30" class="tab">30d</button>
+          <button type="button" data-range="90" class="tab active">90d</button>
+          <button type="button" data-range="180" class="tab">180d</button>
+          <button type="button" data-range="365" class="tab">1y</button>
+          <button type="button" data-range="all" class="tab">all</button>
+        </div>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="chart" height="120"></canvas>
+      </div>
+      <p class="hint">Dots = raw scale weight. Line = time-based EMA (half-life). Gaps don't break the model — longer gaps put more weight on the next weigh-in.</p>
+    </section>
+
+    <section class="two-col">
+      <div class="panel">
+        <h2>Settings</h2>
+        <form id="settings-form" class="settings-form">
+          <label>
+            <span>EMA half-life (days)</span>
+            <input type="number" id="set-half" step="0.5" min="0.5" max="90" />
+            <span class="field-hint">~7d ≈ classic Hacker's Diet α≈0.1 on daily data. Longer = smoother, slower to react.</span>
+          </label>
+          <label>
+            <span>Goal weight (lb, optional)</span>
+            <input type="number" id="set-goal" step="0.1" min="50" max="500" placeholder="—" />
+          </label>
+          <div class="height-row">
+            <span class="height-label">Height (for BMI)</span>
+            <div class="height-inputs">
+              <label>
+                <span>ft</span>
+                <input type="number" id="set-height-ft" step="1" min="4" max="8" placeholder="5" />
+              </label>
+              <label>
+                <span>in</span>
+                <input type="number" id="set-height-in" step="0.5" min="0" max="11.5" placeholder="10" />
+              </label>
+            </div>
+            <span class="field-hint">Used for BMI from trend weight. Clear both to hide BMI.</span>
+          </div>
+          <button type="submit" class="btn">Apply</button>
+        </form>
+        <div class="math-box">
+          <strong>Gap math</strong>
+          <code>decay = 0.5<sup>Δt / H</sup></code>
+          <code>trend = (1−decay)·w + decay·trend<sub>prev</sub></code>
+          <code>kcal/day = rate<sub>lb/day</sub> · 3500</code>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>History</h2>
+          <button type="button" class="btn ghost" id="export-csv">Export CSV</button>
+        </div>
+        <div class="table-wrap">
+          <table id="hist">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Weight</th>
+                <th>Trend</th>
+                <th>Gap</th>
+                <th>α</th>
+                <th>kcal/d</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    Local only · SQLite on this host · 3500 kcal ≈ 1 lb body fat
+  </footer>
+
+  <dialog id="edit-dialog">
+    <form method="dialog" id="edit-form" class="edit-form">
+      <h3>Edit entry</h3>
+      <input type="hidden" id="e-id" />
+      <label>
+        <span>Date</span>
+        <input type="date" id="e-date" required />
+      </label>
+      <label>
+        <span>Weight (lb)</span>
+        <input type="number" id="e-weight" step="0.1" min="50" max="500" required />
+      </label>
+      <label>
+        <span>Note</span>
+        <input type="text" id="e-note" maxlength="200" />
+      </label>
+      <div class="dialog-actions">
+        <button type="button" class="btn danger" id="e-delete">Delete</button>
+        <span class="grow"></span>
+        <button type="button" class="btn ghost" id="e-cancel" value="cancel">Cancel</button>
+        <button type="submit" class="btn primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/app.js?v=5"></script>
+</body>
+</html>
