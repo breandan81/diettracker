@@ -883,52 +883,91 @@
     if (!ctx || typeof Chart === "undefined") return;
 
     const data = filterSeriesByRange(series);
-    const raw = data.map((e) => ({ x: e.logged_at || e.date, y: e.weight }));
-    const trend = data.map((e) => ({ x: e.logged_at || e.date, y: e.trend }));
+    const xOf = (e) => e.logged_at || e.date;
+    const raw = data.map((e) => ({ x: xOf(e), y: e.weight }));
+    const trend = data.map((e) => ({ x: xOf(e), y: e.trend }));
+    const bfRaw = data
+      .filter((e) => e.body_fat != null)
+      .map((e) => ({ x: xOf(e), y: e.body_fat }));
+    const bfTrend = data
+      .filter((e) => e.body_fat_trend != null)
+      .map((e) => ({ x: xOf(e), y: e.body_fat_trend }));
 
     const goal = settings.goal_weight;
     const datasets = [
       {
-        label: "Raw",
+        label: "Weight",
         data: raw,
+        yAxisID: "yLb",
         showLine: false,
         pointRadius: 4,
         pointHoverRadius: 6,
         backgroundColor: "rgba(224, 168, 92, 0.9)",
         borderColor: "rgba(224, 168, 92, 0.9)",
-        order: 2,
+        order: 3,
       },
       {
-        label: "Trend (EMA)",
+        label: "Weight EMA",
         data: trend,
+        yAxisID: "yLb",
         showLine: true,
         pointRadius: 0,
         borderWidth: 2.5,
         borderColor: "rgba(91, 159, 212, 1)",
         backgroundColor: "rgba(91, 159, 212, 0.15)",
         tension: 0.15,
-        order: 1,
+        order: 2,
       },
     ];
 
+    if (bfRaw.length) {
+      datasets.push({
+        label: "Body fat %",
+        data: bfRaw,
+        yAxisID: "yBf",
+        showLine: false,
+        pointRadius: 4,
+        pointHoverRadius: 6,
+        backgroundColor: "rgba(224, 112, 112, 0.95)",
+        borderColor: "rgba(224, 112, 112, 0.95)",
+        order: 1,
+      });
+    }
+    if (bfTrend.length) {
+      datasets.push({
+        label: "BF% EMA",
+        data: bfTrend,
+        yAxisID: "yBf",
+        showLine: true,
+        pointRadius: 0,
+        borderWidth: 2,
+        borderColor: "rgba(240, 140, 140, 0.95)",
+        borderDash: [4, 3],
+        tension: 0.15,
+        order: 0,
+      });
+    }
+
     if (goal != null && goal !== "" && data.length) {
       datasets.push({
-        label: "Goal",
+        label: "Goal weight",
         data: [
-          { x: data[0].date, y: goal },
-          { x: data[data.length - 1].date, y: goal },
+          { x: xOf(data[0]), y: goal },
+          { x: xOf(data[data.length - 1]), y: goal },
         ],
+        yAxisID: "yLb",
         showLine: true,
         pointRadius: 0,
         borderWidth: 1.5,
         borderDash: [6, 4],
         borderColor: "rgba(125, 211, 160, 0.7)",
-        order: 0,
+        order: 4,
       });
     }
 
     if (chart) {
       chart.data.datasets = datasets;
+      chart.options.scales.yBf.display = bfRaw.length > 0 || bfTrend.length > 0;
       chart.update("none");
       return;
     }
@@ -952,6 +991,10 @@
             callbacks: {
               label(ctx) {
                 const v = ctx.parsed.y;
+                const id = ctx.dataset.yAxisID;
+                if (id === "yBf") {
+                  return `${ctx.dataset.label}: ${Number(v).toFixed(1)}%`;
+                }
                 return `${ctx.dataset.label}: ${Number(v).toFixed(2)} lb`;
               },
             },
@@ -960,17 +1003,36 @@
         scales: {
           x: {
             type: "time",
-            time: { unit: "day", tooltipFormat: "yyyy-MM-dd" },
+            time: { tooltipFormat: "yyyy-MM-dd HH:mm" },
             grid: { color: "rgba(120,160,220,0.08)" },
             ticks: { color: "#8b93a7", maxRotation: 0, autoSkipPadding: 16 },
           },
-          y: {
+          yLb: {
+            position: "left",
             grid: { color: "rgba(120,160,220,0.08)" },
             ticks: {
               color: "#8b93a7",
               callback: (v) => v + " lb",
             },
-            title: { display: false },
+            title: {
+              display: true,
+              text: "Weight",
+              color: "#5b9fd4",
+            },
+          },
+          yBf: {
+            position: "right",
+            display: bfRaw.length > 0 || bfTrend.length > 0,
+            grid: { drawOnChartArea: false },
+            ticks: {
+              color: "#e07070",
+              callback: (v) => v + "%",
+            },
+            title: {
+              display: true,
+              text: "Body fat",
+              color: "#e07070",
+            },
           },
         },
       },
