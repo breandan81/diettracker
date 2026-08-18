@@ -51,6 +51,15 @@ static bool g_sentUnit = false;
 static bool g_sentInit = false;
 static bool g_sentProfile = false;
 
+// Cached profile from diet tracker /api/scale-profile
+static bool g_profileReady = false;
+static int g_profSex = 0;       // 0=male 1=female (QN)
+static int g_profAge = 40;
+static float g_profHeightM = 1.75f;
+static bool g_profAthlete = false;
+static int g_profAlgorithm = 4;
+static uint32_t g_profileFetchedMs = 0;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -116,18 +125,6 @@ static bool shouldPost(float lb) {
   return true;
 }
 
-static String nowISO_UTC() {
-  time_t now = time(nullptr);
-  if (now < 1700000000) {
-    return todayISO() + "T12:00:00Z";
-  }
-  struct tm tm;
-  gmtime_r(&now, &tm);
-  char buf[28];
-  strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tm);
-  return String(buf);
-}
-
 static bool postMeasurement(float lb, float bodyFatPct /* <0 if unknown */) {
   if (!g_wifiReady) {
     Serial.println("[http] wifi not ready");
@@ -135,9 +132,10 @@ static bool postMeasurement(float lb, float bodyFatPct /* <0 if unknown */) {
   }
   if (!shouldPost(lb)) return false;
 
+  // Do NOT send logged_at — the diet tracker stamps with its own system clock
+  // so auto-logs stay consistent with server time (no ESP32 NTP dependency).
   String url = String("http://") + TRACKER_HOST + ":" + String(TRACKER_PORT) + TRACKER_PATH;
-  String body = String("{\"logged_at\":\"") + nowISO_UTC()
-              + "\",\"weight\":" + String(lb, 2);
+  String body = String("{\"weight\":") + String(lb, 2);
   if (bodyFatPct >= 0.0f && bodyFatPct <= 80.0f) {
     body += ",\"body_fat\":" + String(bodyFatPct, 1);
   }
@@ -227,8 +225,100 @@ static bool sendMeasurementInit() {
   return cmdWrite(cmd, sizeof(cmd));
 }
 
-static bool sendBootstrapProfile() {
-  // Guest weight-only profile so extended scales start measuring (algorithm=0).
+static bool jsonExtractInt(const String& body, const char* key, int* out) {
+  String pat = String("\"") + key + "\":";
+  int i = body.indexOf(pat);
+  if (i < 0) return false;
+  i += pat.length();
+  while (i < (int)body.length() && (body[i] == ' ')) i++;
+  *out = body.substring(i).toInt();
+  return true;
+}
+
+static bool jsonExtractFloat(const String& body, const char* key, float* out) {
+  String pat = String("\"") + key + "\":";
+  int i = body.indexOf(pat);
+  if (i < 0) return false;
+  i += pat.length();
+  while (i < (int)body.length() && (body[i] == ' ')) i++;
+  *out = body.substring(i).toFloat();
+  return true;
+}
+
+static bool jsonExtractBool(const String& body, const char* key, bool* out) {
+  String pat = String("\"") + key + "\":";
+  int i = body.indexOf(pat);
+  if (i < 0) return false;
+  i += pat.length();
+  while (i < (int)body.length() && (body[i] == ' ')) i++;
+  if (body.startsWith("true", i)) {
+    *out = true;
+    return true;
+  }
+  if (body.startsWith("false", i)) {
+    *out = false;
+    return true;
+  }
+  *out = body.substring(i).toInt() != 0;
+  return true;
+}
+
+static bool fetchScaleProfile() {
+  if (!g_wifiReady) return false;
+  String url = String("http://") + TRACKER_HOST + ":" + String(TRACKER_PORT) + "/api/scale-profile";
+  HTTPClient http;
+  http.setTimeout(5000);
+  if (!http.begin(url)) return false;
+  int code = http.GET();
+  String body = http.getString();
+  http.end();
+  if (code != 200) {
+    Serial.printf("[profile] GET failed %d\n", code);
+    return false;
+  }
+
+  bool ready = false;
+  jsonExtractBool(body, "ready", &ready);
+  int sex = 0, age = 40, algo = 4;
+  float hm = 1.75f;
+  bool athlete = false;
+  jsonExtractInt(body, "sex_code", &sex);
+  jsonExtractInt(body, "age", &age);
+  jsonExtractFloat(body, "height_m", &hm);
+  jsonExtractBool(body, "athlete", &athlete);
+  jsonExtractInt(body, "algorithm", &algo);
+
+  g_profileReady = ready && hm > 0.5f && age >= 5;
+  if (g_profileReady) {
+    g_profSex = sex;
+    g_profAge = age;
+    g_profHeightM = hm;
+    g_profAthlete = athlete;
+    g_profAlgorithm = algo > 0 ? algo : 4;
+    g_profileFetchedMs = millis();
+    Serial.printf("[profile] ok sex=%d age=%d height_m=%.3f athlete=%d algo=%d\n",
+                  g_profSex, g_profAge, g_profHeightM, (int)g_profAthlete, g_profAlgorithm);
+  } else {
+    Serial.println("[profile] incomplete — set height/sex/age on tracker for body fat");
+  }
+  return g_profileReady;
+}
+
+static bool sendUserProfile() {
+  // Guest-slot profile frame (renpho-escs20m build_user_profile_command)
+  // Sex: Male=0 Female=1. Height as mm uint16 BE. Flag = algorithm (+0x0A if athlete).
+  if (!g_profileReady) {
+    // weight-only bootstrap so measurement still starts
+    uint8_t payload[13] = {
+        0xA0, 0x0D, 0x02, 0xFE, 0xFF, 0xEE,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00};
+    payload[12] = checksum8(payload, 12);
+    Serial.println("[gatt] reply bootstrap profile (weight-only — profile not ready)");
+    return cmdWrite(payload, 13);
+  }
+
+  uint16_t height_mm = (uint16_t)lroundf(g_profHeightM * 1000.0f);
+  uint8_t flag = (uint8_t)((g_profAlgorithm + (g_profAthlete ? 0x0A : 0)) & 0xFF);
   uint8_t payload[13];
   payload[0] = 0xA0;
   payload[1] = 0x0D;
@@ -236,14 +326,15 @@ static bool sendBootstrapProfile() {
   payload[3] = 0xFE;
   payload[4] = 0xFF;
   payload[5] = 0xEE;
-  payload[6] = 0x01;  // sex
-  payload[7] = 0x00;  // age
-  payload[8] = 0x00;  // height hi
-  payload[9] = 0x00;  // height lo
-  payload[10] = 0x00; // algorithm 0 = no on-device BF
-  payload[11] = 0x02; // trailer
+  payload[6] = (uint8_t)(g_profSex & 0xFF);
+  payload[7] = (uint8_t)(g_profAge & 0xFF);
+  payload[8] = (uint8_t)((height_mm >> 8) & 0xFF);
+  payload[9] = (uint8_t)(height_mm & 0xFF);
+  payload[10] = flag;
+  payload[11] = 0x02;
   payload[12] = checksum8(payload, 12);
-  Serial.println("[gatt] reply bootstrap profile (weight-only)");
+  Serial.printf("[gatt] reply profile sex=%d age=%d height_mm=%u flag=0x%02X\n",
+                g_profSex, g_profAge, (unsigned)height_mm, flag);
   return cmdWrite(payload, 13);
 }
 
@@ -279,7 +370,11 @@ static void handleQnNotify(uint8_t* data, size_t len) {
     // extended wants profile when length==0x05
     if (flen == 0x05 && !g_sentProfile) {
       g_sentProfile = true;
-      sendBootstrapProfile();
+      // refresh profile right before answering when stale
+      if (!g_profileReady || (millis() - g_profileFetchedMs) > 60000UL) {
+        fetchScaleProfile();
+      }
+      sendUserProfile();
     }
     return;
   }
@@ -524,6 +619,7 @@ void setup() {
   Serial.printf("mode=%d tracker=%s:%d\n", BLE_MODE, TRACKER_HOST, TRACKER_PORT);
 
   ensureWifi();
+  if (g_wifiReady) fetchScaleProfile();
 
   NimBLEDevice::init("diet-ble");
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);
@@ -538,6 +634,9 @@ void loop() {
       lastTry = millis();
       ensureWifi();
     }
+  } else if (millis() - g_profileFetchedMs > 300000UL) {
+    // refresh profile every 5 minutes
+    fetchScaleProfile();
   }
 
 #if BLE_MODE == MODE_GATT || BLE_MODE == MODE_AUTO

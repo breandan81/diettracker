@@ -820,6 +820,9 @@
     const parts = heightPartsFromInches(settings.height_in);
     $("#set-height-ft").value = parts.ft;
     $("#set-height-in").value = parts.inch;
+    if ($("#set-sex")) $("#set-sex").value = settings.sex || "";
+    if ($("#set-age")) $("#set-age").value = settings.age != null ? settings.age : "";
+    if ($("#set-athlete")) $("#set-athlete").checked = !!settings.athlete;
   }
 
   function renderTable() {
@@ -1020,10 +1023,14 @@
       $("#set-height-ft").value,
       $("#set-height-in").value
     );
+    const ageRaw = $("#set-age")?.value;
     const body = {
       half_life_days: half,
       goal_weight: goalRaw === "" ? null : parseFloat(goalRaw),
       height_in: heightIn,
+      sex: $("#set-sex")?.value || null,
+      age: ageRaw === "" || ageRaw == null ? null : parseInt(ageRaw, 10),
+      athlete: !!$("#set-athlete")?.checked,
     };
     try {
       const data = await api("/api/settings", {

@@ -110,6 +110,9 @@ def init_db(conn: sqlite3.Connection) -> None:
         "unit": "lb",
         "goal_weight": "",
         "height_in": "",
+        "sex": "",  # male | female
+        "age": "",  # years
+        "athlete": "0",  # 0|1 — Renpho athlete BF curve
     }
     for k, v in defaults.items():
         conn.execute(
@@ -222,7 +225,40 @@ def all_settings() -> dict:
         out["half_life_days"] = DEFAULT_HALF_LIFE_DAYS
     out["goal_weight"] = _float_or_none(out.get("goal_weight") or "")
     out["height_in"] = _float_or_none(out.get("height_in") or "")
+    sex = (out.get("sex") or "").strip().lower()
+    out["sex"] = sex if sex in ("male", "female") else None
+    age = _float_or_none(out.get("age") or "")
+    out["age"] = int(age) if age is not None else None
+    ath = (out.get("athlete") or "0").strip().lower()
+    out["athlete"] = ath in ("1", "true", "yes", "on")
     return out
+
+
+def scale_profile_payload() -> dict:
+    """Compact profile for ESP32 BLE → Renpho (QN Sex: Male=0, Female=1)."""
+    s = all_settings()
+    height_in = s.get("height_in")
+    height_m = (float(height_in) * 0.0254) if height_in else None
+    sex = s.get("sex")
+    sex_code = {"male": 0, "female": 1}.get(sex) if sex else None
+    ready = bool(
+        height_m
+        and height_m > 0
+        and sex_code is not None
+        and s.get("age") is not None
+        and 5 <= int(s["age"]) <= 120
+    )
+    return {
+        "ready": ready,
+        "sex": sex,
+        "sex_code": sex_code,
+        "age": s.get("age"),
+        "height_in": height_in,
+        "height_m": round(height_m, 4) if height_m else None,
+        "athlete": bool(s.get("athlete")),
+        "algorithm": 4,  # Renpho default on-device BF algorithm
+        "unit": s.get("unit") or "lb",
+    }
 
 
 def attach_bmi(summ: dict, settings: Optional[dict] = None) -> dict:
@@ -341,6 +377,9 @@ class Handler(SimpleHTTPRequestHandler):
                 s["kcal_per_lb"] = KCAL_PER_LB
                 return self._json(200, s)
 
+            if path == "/api/scale-profile":
+                return self._json(200, scale_profile_payload())
+
             if path == "/api/photos":
                 return self._json(200, {"photos": list_photos(DB)})
 
@@ -455,16 +494,27 @@ class Handler(SimpleHTTPRequestHandler):
     # --- mutations ---
 
     def _parse_logged_at(self, data: dict) -> tuple[str, str]:
-        """Return (date_yyyy_mm_dd, logged_at_iso_utc)."""
+        """Return (date_yyyy_mm_dd, logged_at_iso_utc).
+
+        Prefer an explicit client timestamp when provided (manual edits).
+        Otherwise use this host's clock — ESP32 auto-logs omit logged_at on
+        purpose so server time is authoritative.
+        """
         raw = data.get("logged_at") or data.get("timestamp") or data.get("date")
         if not raw:
-            dt = datetime.now(timezone.utc)
+            dt = datetime.now().astimezone()  # server local tz with offset
         else:
             try:
-                dt = parse_datetime(raw)
+                # bare YYYY-MM-DD from old clients → noon local for that day
+                if isinstance(raw, str) and "T" not in raw and len(raw.strip()) == 10:
+                    local = datetime.now().astimezone().tzinfo
+                    dt = datetime.fromisoformat(raw.strip() + "T12:00:00").replace(tzinfo=local)
+                else:
+                    dt = parse_datetime(raw)
             except ValueError:
                 raise ValueError("invalid logged_at/date")
-        return dt.date().isoformat(), dt.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+        dt = dt.astimezone()  # normalize to server-local aware
+        return dt.date().isoformat(), dt.replace(microsecond=0).isoformat()
 
     def _create_weight(self, data: dict) -> None:
         if "weight" not in data:
@@ -850,6 +900,41 @@ class Handler(SimpleHTTPRequestHandler):
                 if hif < 36 or hif > 96:
                     return self._err(400, "height_in out of range (36–96 in)")
                 set_setting("height_in", str(hif))
+
+        if "sex" in data:
+            sex = data["sex"]
+            if sex is None or sex == "":
+                set_setting("sex", "")
+            else:
+                sex_s = str(sex).strip().lower()
+                if sex_s not in ("male", "female"):
+                    return self._err(400, "sex must be male or female")
+                set_setting("sex", sex_s)
+
+        if "age" in data:
+            age = data["age"]
+            if age is None or age == "":
+                set_setting("age", "")
+            else:
+                try:
+                    age_i = int(float(age))
+                except (TypeError, ValueError):
+                    return self._err(400, "age must be an integer")
+                if age_i < 5 or age_i > 120:
+                    return self._err(400, "age out of range")
+                set_setting("age", str(age_i))
+
+        if "athlete" in data:
+            ath = data["athlete"]
+            if isinstance(ath, bool):
+                set_setting("athlete", "1" if ath else "0")
+            elif ath in (None, ""):
+                set_setting("athlete", "0")
+            else:
+                set_setting(
+                    "athlete",
+                    "1" if str(ath).strip().lower() in ("1", "true", "yes", "on") else "0",
+                )
 
         if "unit" in data and data["unit"]:
             unit = str(data["unit"]).lower()

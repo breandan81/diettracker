@@ -435,8 +435,10 @@ main {
 .settings-form label { min-width: 0; }
 
 input[type="date"],
+input[type="datetime-local"],
 input[type="number"],
-input[type="text"] {
+input[type="text"],
+select {
   font-family: var(--mono);
   font-size: 14px;
   color: var(--text);
@@ -445,6 +447,9 @@ input[type="text"] {
   border-radius: 8px;
   padding: 8px 10px;
   outline: none;
+}
+select {
+  min-height: 38px;
 }
 input:focus {
   border-color: var(--accent);

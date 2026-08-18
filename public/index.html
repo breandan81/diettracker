@@ -9,7 +9,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-  <link rel="stylesheet" href="/style.css?v=11" />
+  <link rel="stylesheet" href="/style.css?v=12" />
 </head>
 <body class="mood-idle" id="body-mood">
   <div id="fx-layer" aria-hidden="true"></div>
@@ -219,7 +219,7 @@
             <input type="number" id="set-goal" step="0.1" min="50" max="500" placeholder="—" />
           </label>
           <div class="height-row">
-            <span class="height-label">Height (for BMI)</span>
+            <span class="height-label">Height (BMI + Renpho profile)</span>
             <div class="height-inputs">
               <label>
                 <span>ft</span>
@@ -230,7 +230,28 @@
                 <input type="number" id="set-height-in" step="0.5" min="0" max="11.5" placeholder="10" />
               </label>
             </div>
-            <span class="field-hint">Used for BMI from trend weight. Clear both to hide BMI.</span>
+          </div>
+          <div class="height-row">
+            <span class="height-label">Scale body-fat profile (sent over BLE)</span>
+            <div class="height-inputs">
+              <label>
+                <span>Sex</span>
+                <select id="set-sex">
+                  <option value="">—</option>
+                  <option value="male">Male</option>
+                  <option value="female">Female</option>
+                </select>
+              </label>
+              <label>
+                <span>Age (years)</span>
+                <input type="number" id="set-age" step="1" min="5" max="120" placeholder="—" />
+              </label>
+            </div>
+            <label class="check" style="margin-top:8px;flex-direction:row;align-items:center;gap:8px;">
+              <input type="checkbox" id="set-athlete" />
+              <span>Athlete mode (Renpho BF curve)</span>
+            </label>
+            <span class="field-hint">Height + sex + age are pushed to the ESP32 → scale so on-device body fat can run. ESP polls <code>/api/scale-profile</code>.</span>
           </div>
           <button type="submit" class="btn">Apply</button>
         </form>
@@ -393,7 +414,7 @@
     </form>
   </dialog>
 
-  <script src="/app.js?v=11"></script>
-  <script src="/photos-ui.js?v=11"></script>
+  <script src="/app.js?v=12"></script>
+  <script src="/photos-ui.js?v=12"></script>
 </body>
 </html>
