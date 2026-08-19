@@ -292,17 +292,20 @@ main {
   background: var(--panel);
   color: var(--text);
   padding: 0;
-  max-width: min(920px, calc(100vw - 24px));
+  max-width: min(980px, calc(100vw - 16px));
   width: 100%;
+  max-height: calc(100dvh - 16px);
+  overflow: auto;
 }
 #photo-dialog::backdrop { background: rgba(0, 0, 0, 0.65); }
 .photo-dialog-body {
   display: grid;
-  grid-template-columns: 1.25fr 1fr;
+  grid-template-columns: minmax(0, 1.15fr) minmax(280px, 1fr);
   gap: 0;
-  max-height: 90vh;
+  /* Dialog itself scrolls — don't trap projection/ratings in a clipped pane */
+  max-height: none;
 }
-@media (max-width: 720px) {
+@media (max-width: 820px) {
   .photo-dialog-body { grid-template-columns: 1fr; }
 }
 .pd-images {
@@ -310,17 +313,34 @@ main {
   grid-template-columns: 1fr;
   gap: 0;
   background: #05070c;
-  max-height: 90vh;
-  overflow: auto;
+  max-height: none;
+  overflow: visible;
 }
+/* Stack Now / At-goal so both images stay visible (esp. mobile).
+   Side-by-side only on wide desktops where the left pane is roomy. */
 .pd-images.has-projection {
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
+}
+@media (min-width: 1100px) {
+  #photo-dialog { max-width: min(1200px, calc(100vw - 24px)); }
+  .pd-images.has-projection {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 .pd-images figure {
   margin: 0;
   display: flex;
   flex-direction: column;
   min-width: 0;
+}
+.pd-images figure + figure {
+  border-top: 1px solid var(--line);
+}
+@media (min-width: 1100px) {
+  .pd-images.has-projection figure + figure {
+    border-top: none;
+    border-left: 1px solid var(--line);
+  }
 }
 .pd-images figcaption {
   font-family: var(--mono);
@@ -329,16 +349,104 @@ main {
   text-transform: uppercase;
   color: var(--muted);
   padding: 8px 10px 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.pd-zoom-hint {
+  letter-spacing: 0.04em;
+  text-transform: none;
+  opacity: 0.65;
+  font-size: 10px;
 }
 .pd-images img {
   width: 100%;
-  max-height: calc(90vh - 28px);
+  max-height: min(52dvh, 560px);
   object-fit: contain;
   background: #05070c;
 }
+.pd-images.has-projection img {
+  max-height: min(40dvh, 420px);
+}
+.pd-images img.pd-zoomable {
+  cursor: zoom-in;
+}
+.pd-images img.pd-zoomable:hover {
+  outline: 1px solid rgba(91, 159, 212, 0.45);
+}
+
+/* Full-screen zoom for Now / At-goal thumbs.
+   Must be a <dialog showModal()> so it stacks above #photo-dialog's top layer. */
+.photo-lightbox {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 48px 16px 24px;
+  border: none;
+  border-radius: 0;
+  background: rgba(0, 0, 0, 0.92);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  cursor: zoom-out;
+  box-sizing: border-box;
+}
+.photo-lightbox:not([open]) {
+  display: none;
+}
+.photo-lightbox::backdrop {
+  background: rgba(0, 0, 0, 0.85);
+}
+.photo-lightbox img {
+  max-width: min(96vw, 1400px);
+  max-height: min(88dvh, 1200px);
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 4px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.55);
+  cursor: default;
+}
+.photo-lightbox-cap {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #c5cad6;
+}
+.photo-lightbox-close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  z-index: 1;
+  width: 44px;
+  height: 44px;
+  border: 1px solid rgba(120, 160, 220, 0.35);
+  border-radius: 8px;
+  background: rgba(20, 24, 36, 0.95);
+  color: var(--text);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.photo-lightbox-close:hover {
+  border-color: var(--accent);
+  color: #fff;
+}
 .photo-dialog-meta {
   padding: 18px;
-  overflow-y: auto;
+  overflow: visible;
+  min-width: 0;
 }
 .photo-dialog-meta h3 { margin: 0 0 12px; }
 .pd-compare-scores {
@@ -347,8 +455,14 @@ main {
   gap: 12px;
   margin-bottom: 12px;
 }
+/* Always stack Now vs At-goal ratings — side-by-side crushes the 3 score tiles */
 .pd-compare-scores.has-goal {
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+.pd-score-col + .pd-score-col {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
 }
 .pd-col-label {
   font-family: var(--mono);
@@ -360,7 +474,7 @@ main {
 }
 .pd-scores {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   margin-bottom: 8px;
 }
@@ -369,6 +483,13 @@ main {
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 8px;
+  min-width: 0;
+}
+.pd-scores strong {
+  display: block;
+  font-size: 13px;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 .pd-scores .muted {
   display: block;
@@ -618,9 +739,14 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
 .edit-form h3 { margin: 0 0 8px; }
 .dialog-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
   margin-top: 8px;
+}
+.dialog-actions .grow {
+  flex: 1 1 40px;
+  min-width: 12px;
 }
 .grow { flex: 1; }
 

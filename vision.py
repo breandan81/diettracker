@@ -25,6 +25,7 @@ When given a photo of a person, analyze their physical appearance and return a s
 Rules:
 - Be honest and consistent across photos so trends over time are meaningful.
 - Account for clothing, lighting, camera angle, and pose — note when these factors reduce confidence.
+- Separate overall appearance from pure body-composition assessment. Clothing, grooming, posture, and facial structure all matter.
 - Do not be overly flattering or harsh. Aim for realistic mid-40s male standards.
 - Always respond with valid JSON only. No extra text before or after the JSON.
 

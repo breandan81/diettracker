@@ -9,7 +9,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-  <link rel="stylesheet" href="/style.css?v=12" />
+  <link rel="stylesheet" href="/style.css?v=17" />
 </head>
 <body class="mood-idle" id="body-mood">
   <div id="fx-layer" aria-hidden="true"></div>
@@ -340,12 +340,12 @@
     <div class="photo-dialog-body">
       <div class="pd-images">
         <figure>
-          <figcaption>Now</figcaption>
-          <img id="pd-img" alt="progress photo" />
+          <figcaption>Now <span class="pd-zoom-hint">click to zoom</span></figcaption>
+          <img id="pd-img" class="pd-zoomable" alt="progress photo" title="Click to zoom" />
         </figure>
         <figure id="pd-proj-wrap" hidden>
-          <figcaption id="pd-proj-caption">At goal</figcaption>
-          <img id="pd-proj-img" alt="goal weight projection" />
+          <figcaption id="pd-proj-caption">At goal <span class="pd-zoom-hint">click to zoom</span></figcaption>
+          <img id="pd-proj-img" class="pd-zoomable" alt="goal weight projection" title="Click to zoom" />
         </figure>
       </div>
       <div class="photo-dialog-meta">
@@ -385,6 +385,12 @@
     </div>
   </dialog>
 
+  <dialog id="photo-lightbox" class="photo-lightbox">
+    <button type="button" class="photo-lightbox-close" id="photo-lightbox-close" aria-label="Close zoom">×</button>
+    <img id="photo-lightbox-img" alt="" />
+    <p class="photo-lightbox-cap" id="photo-lightbox-cap"></p>
+  </dialog>
+
   <dialog id="edit-dialog">
     <form method="dialog" id="edit-form" class="edit-form">
       <h3>Edit entry</h3>
@@ -414,8 +420,8 @@
     </form>
   </dialog>
 
-  <script src="/bf_axis.js?v=14"></script>
-  <script src="/app.js?v=14"></script>
-  <script src="/photos-ui.js?v=14"></script>
+  <script src="/bf_axis.js?v=17"></script>
+  <script src="/app.js?v=17"></script>
+  <script src="/photos-ui.js?v=17"></script>
 </body>
 </html>

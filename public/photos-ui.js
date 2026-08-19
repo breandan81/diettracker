@@ -241,7 +241,11 @@
     if (p?.has_projection && p.projection_url) {
       $("#pd-proj-img").src = p.projection_url + "?t=" + Date.now();
       const g = p.projection_goal_lb != null ? fmt(p.projection_goal_lb, 0) : "?";
-      $("#pd-proj-caption").textContent = `At goal (~${g} lb)`;
+      const cap = $("#pd-proj-caption");
+      if (cap) {
+        cap.innerHTML =
+          `At goal (~${g} lb) <span class="pd-zoom-hint">click to zoom</span>`;
+      }
       wrap.hidden = false;
       imgs?.classList.add("has-projection");
 
@@ -315,7 +319,12 @@
       .filter(Boolean)
       .join("\n");
     showProjection(p);
-    $("#photo-dialog").showModal();
+    const dlg = $("#photo-dialog");
+    dlg.showModal();
+    // Keep "Now" at the top — focusing action buttons can scroll the dialog
+    // and hide the real / Imagine photos on small viewports.
+    dlg.scrollTop = 0;
+    document.querySelector(".pd-images")?.scrollTo?.(0, 0);
   }
 
   // events
@@ -331,6 +340,60 @@
     if (!card) return;
     openPhoto(parseInt(card.dataset.id, 10));
   });
+
+  function openLightbox(src, caption) {
+    const box = $("#photo-lightbox");
+    const img = $("#photo-lightbox-img");
+    const cap = $("#photo-lightbox-cap");
+    if (!box || !img || !src) return;
+    img.src = src;
+    img.alt = caption || "";
+    if (cap) cap.textContent = caption || "";
+    // showModal() puts this in the top layer above #photo-dialog
+    if (typeof box.showModal === "function") {
+      if (!box.open) box.showModal();
+    } else {
+      box.setAttribute("open", "");
+    }
+  }
+
+  function closeLightbox() {
+    const box = $("#photo-lightbox");
+    if (!box) return;
+    const img = $("#photo-lightbox-img");
+    if (img) img.removeAttribute("src");
+    if (typeof box.close === "function") {
+      if (box.open) box.close();
+    } else {
+      box.removeAttribute("open");
+    }
+  }
+
+  $("#pd-img")?.addEventListener("click", () => {
+    const src = $("#pd-img")?.src;
+    if (!src) return;
+    openLightbox(src, "Now");
+  });
+  $("#pd-proj-img")?.addEventListener("click", () => {
+    const src = $("#pd-proj-img")?.src;
+    if (!src) return;
+    const raw = ($("#pd-proj-caption")?.textContent || "At goal").replace(
+      /\s*click to zoom\s*/i,
+      ""
+    ).trim();
+    openLightbox(src, raw || "At goal");
+  });
+  $("#photo-lightbox-close")?.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    closeLightbox();
+  });
+  $("#photo-lightbox")?.addEventListener("click", (ev) => {
+    // panel / empty area closes; clicking the image itself does not
+    if (ev.target && ev.target.id === "photo-lightbox-img") return;
+    closeLightbox();
+  });
+  // Native dialog Escape closes the topmost modal first (lightbox), then photo-dialog.
+  $("#photo-dialog")?.addEventListener("close", () => closeLightbox());
 
   $("#pd-close")?.addEventListener("click", () => $("#photo-dialog").close());
   $("#pd-delete")?.addEventListener("click", async () => {
