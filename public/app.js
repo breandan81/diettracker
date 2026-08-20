@@ -97,7 +97,12 @@
       throw new Error("Not authenticated");
     }
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || data.detail || res.statusText || "request failed");
+    if (!res.ok) {
+      const err = new Error(data.error || data.detail || res.statusText || "request failed");
+      err.status = res.status;
+      err.data = data;
+      throw err;
+    }
     return data;
   }
 
@@ -191,25 +196,69 @@
     }
   }
 
+  function setCoachQuotaNotice(text) {
+    const meta = $("#coach-meta");
+    if (!meta) return;
+    if (!text) {
+      // restore normal meta from aiCoach if present
+      if (aiCoach) applyAiCoachToDom(true);
+      else {
+        meta.textContent = "";
+        meta.hidden = true;
+      }
+      meta.classList.remove("quota-hit");
+      return;
+    }
+    meta.textContent = text;
+    meta.hidden = false;
+    meta.classList.add("quota-hit");
+  }
+
   async function requestPepTalk(opts = {}) {
     const btn = $("#btn-pep");
     const label = $("#btn-pep-label");
     if (btn) btn.classList.add("busy");
     if (label) label.textContent = "Thinking";
+    setCoachQuotaNotice(null);
     try {
       const data = await api("/api/coach", {
         method: "POST",
         body: JSON.stringify({ style: coachStyle }),
       });
-      aiCoach = data.coach;
-      aiPinned = true;
-      applyAiCoachToDom(true);
+      // Keep previous text if server somehow returns empty coach
+      if (data.coach) {
+        aiCoach = data.coach;
+        aiPinned = true;
+        applyAiCoachToDom(true);
+      }
       if (opts.celebrate !== false && aiCoach?.toast) {
         burstFX(aiCoach.toast);
       }
       await refreshKoboldStatus();
       return aiCoach;
     } catch (e) {
+      if (e.status === 429) {
+        // Leave title/message as-is; explain quota under the coach copy
+        const lim = e.data?.limits?.coach;
+        const used = e.data?.usage_today?.coach;
+        const detail =
+          (typeof e.data?.detail === "string" && e.data.detail) ||
+          e.data?.error ||
+          e.message ||
+          "Daily AI coach quota exceeded.";
+        let notice =
+          used != null && lim != null
+            ? `AI quota for today exceeded (${used}/${lim} coach calls). Previous pep talk kept — try again tomorrow.`
+            : `AI quota for today exceeded — previous pep talk kept. ${detail}`;
+        if (!aiCoach && e.data?.coach) {
+          aiCoach = e.data.coach;
+          aiPinned = true;
+          applyAiCoachToDom(true);
+        }
+        setCoachQuotaNotice(notice);
+        await refreshKoboldStatus();
+        return aiCoach;
+      }
       const msg = $("#form-msg");
       if (msg) {
         msg.textContent = "Coach failed: " + e.message;
@@ -236,7 +285,7 @@
       el.classList.add("ai-sourced");
     }
     const meta = $("#coach-meta");
-    if (meta) {
+    if (meta && !meta.classList.contains("quota-hit")) {
       const bits = [];
       if (aiCoach.style) bits.push(aiCoach.style);
       if (aiCoach.model) bits.push(String(aiCoach.model).replace(/^koboldcpp\//, ""));

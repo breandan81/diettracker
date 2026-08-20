@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db import get_db
 from app.deps import get_current_user
-from app.models import Photo, User, Weight
+from app.models import Photo, User, UserSetting, Weight
 from app.services import (
     get_user_settings,
     load_user_trend,
@@ -198,9 +198,6 @@ def coach_get(user: User = Depends(get_current_user), db: Session = Depends(get_
     coach = None
     # last_coach_json may live in user settings from migration
     raw = None
-    from sqlalchemy import select
-    from app.models import UserSetting
-
     row = db.scalar(
         select(UserSetting).where(
             UserSetting.user_id == user.id, UserSetting.key == "last_coach_json"
@@ -239,9 +236,35 @@ def coach_post(
     # Admins still count unless we want unlimited — plan said admin higher/unlimited
     is_admin = user.id in _gs().admin_ids
     if not is_admin and usage.get("coach", 0) >= limits.get("coach", 20):
-        raise HTTPException(
+        # Return last coach so the UI can keep showing it
+        from fastapi.responses import JSONResponse
+
+        last = None
+        row = db.scalar(
+            select(UserSetting).where(
+                UserSetting.user_id == user.id, UserSetting.key == "last_coach_json"
+            )
+        )
+        if row and row.value:
+            try:
+                last = json.loads(row.value)
+            except Exception:
+                last = None
+        return JSONResponse(
             status_code=429,
-            detail=f"Daily coach limit reached ({limits['coach']}). Try again tomorrow.",
+            content={
+                "error": (
+                    f"Daily AI coach quota exceeded ({usage.get('coach', 0)}/{limits['coach']}). "
+                    "Previous pep talk is unchanged — try again tomorrow."
+                ),
+                "detail": (
+                    f"Daily AI coach quota exceeded ({usage.get('coach', 0)}/{limits['coach']}). "
+                    "Previous pep talk is unchanged — try again tomorrow."
+                ),
+                "usage_today": usage,
+                "limits": limits,
+                "coach": last,
+            },
         )
 
     series, summ, half, sets = load_user_trend(db, user.id)

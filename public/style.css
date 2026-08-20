@@ -114,6 +114,10 @@ h1 {
   color: var(--muted);
   font-size: 14px;
 }
+#coach-meta.quota-hit {
+  color: var(--warn, #e0a85c);
+  font-weight: 500;
+}
 
 main {
   max-width: 1100px;
