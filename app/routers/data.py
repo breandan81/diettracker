@@ -161,29 +161,100 @@ def photo_projection(
 
 
 @router.get("/api/coach/status")
-def coach_status():
+def coach_status(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.quotas import get_quota_limits, usage_for_user
+
+    limits = get_quota_limits(db)
+    usage = usage_for_user(db, user.id)
     return {
         "ok": bool(settings.xai_api_key),
         "provider": "xai",
         "model": settings.xai_model,
         "configured": bool(settings.xai_api_key),
+        "usage_today": usage,
+        "limits": limits,
     }
 
 
 @router.get("/api/vision/status")
-def vision_status():
+def vision_status(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.quotas import get_quota_limits, usage_for_user
+
     return {
         "ok": bool(settings.xai_api_key),
         "model": settings.xai_model,
         "configured": bool(settings.xai_api_key),
         "base_url": "https://api.x.ai/v1",
+        "usage_today": usage_for_user(db, user.id),
+        "limits": get_quota_limits(db),
     }
 
 
 @router.get("/api/coach")
 def coach_get(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    import json
+
     sets = get_user_settings(db, user.id)
+    coach = None
+    # last_coach_json may live in user settings from migration
     raw = None
-    # last_coach_json stored as setting if present
-    row_settings = get_user_settings(db, user.id)
-    return {"coach": None, "status": coach_status()}
+    from sqlalchemy import select
+    from app.models import UserSetting
+
+    row = db.scalar(
+        select(UserSetting).where(
+            UserSetting.user_id == user.id, UserSetting.key == "last_coach_json"
+        )
+    )
+    if row and row.value:
+        try:
+            coach = json.loads(row.value)
+        except Exception:
+            coach = None
+    return {"coach": coach, "status": coach_status(user, db)}
+
+
+class CoachBody(BaseModel):
+    style: str | None = "pep"
+
+
+@router.post("/api/coach")
+def coach_post(
+    body: CoachBody,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    import json
+
+    from app.coach_xai import generate_pep_xai
+    from app.quotas import get_quota_limits, increment_usage, usage_for_user
+    from app.config import get_settings as _gs
+
+    style = (body.style or "pep").strip().lower()
+    if style not in ("pep", "roast", "haiku", "brief"):
+        style = "pep"
+
+    limits = get_quota_limits(db)
+    usage = usage_for_user(db, user.id)
+    # Admins still count unless we want unlimited — plan said admin higher/unlimited
+    is_admin = user.id in _gs().admin_ids
+    if not is_admin and usage.get("coach", 0) >= limits.get("coach", 20):
+        raise HTTPException(
+            status_code=429,
+            detail=f"Daily coach limit reached ({limits['coach']}). Try again tomorrow.",
+        )
+
+    series, summ, half, sets = load_user_trend(db, user.id)
+    try:
+        coach = generate_pep_xai(series, summ, sets, style=style)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+    increment_usage(db, user.id, "coach")
+    set_user_setting(db, user.id, "last_coach_json", json.dumps(coach))
+    db.commit()
+    return {
+        "coach": coach,
+        "status": coach_status(user, db),
+        "usage_today": usage_for_user(db, user.id),
+    }

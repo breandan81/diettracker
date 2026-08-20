@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>τrend — admin</title>
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="stylesheet" href="/style.css?v=30" />
+  <style>
+    .admin-wrap { max-width: 1100px; margin: 24px auto 48px; padding: 0 20px; }
+    .admin-head { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+    .admin-head h1 { margin: 0; font-size: 22px; }
+    .admin-grid { display: grid; gap: 14px; }
+    @media (min-width: 900px) {
+      .admin-grid { grid-template-columns: 1.4fr 0.8fr; align-items: start; }
+    }
+    table.admin-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    table.admin-table th, table.admin-table td {
+      border-bottom: 1px solid var(--line);
+      padding: 8px 6px;
+      text-align: left;
+      vertical-align: top;
+    }
+    table.admin-table th { color: var(--muted); font-weight: 500; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+    .pill-off { opacity: 0.55; }
+    .quota-form label { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
+    .quota-form input { width: 90px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; color: var(--text); padding: 8px; }
+    .msg { font-size: 13px; margin-top: 8px; }
+    .msg.err { color: var(--danger); }
+    .msg.ok { color: var(--accent-2); }
+    .mono { font-family: var(--mono); font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="admin-wrap">
+    <div class="admin-head">
+      <div>
+        <h1>Admin</h1>
+        <div class="mono" id="who">…</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <a class="btn" href="/">← app</a>
+        <button type="button" class="btn ghost" id="btn-refresh">Refresh</button>
+        <button type="button" class="btn" id="btn-logout">Log out</button>
+      </div>
+    </div>
+
+    <div class="admin-grid">
+      <section class="panel">
+        <h2>Users</h2>
+        <div style="overflow-x:auto;">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Email</th>
+                <th>Data</th>
+                <th>Usage today</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="users-body"></tbody>
+          </table>
+        </div>
+        <p class="msg" id="users-msg" hidden></p>
+      </section>
+
+      <section class="panel">
+        <h2>Daily AI quotas</h2>
+        <p class="hint">Defaults from env; saving stores overrides in the DB.</p>
+        <form class="quota-form" id="quota-form">
+          <label>Coach <input type="number" min="0" id="q-coach" /></label>
+          <label>Vision <input type="number" min="0" id="q-vision" /></label>
+          <label>Imagine <input type="number" min="0" id="q-imagine" /></label>
+          <button type="submit" class="btn primary">Save quotas</button>
+        </form>
+        <p class="msg" id="quota-msg" hidden></p>
+        <p class="hint" id="day-label"></p>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    const $ = (s) => document.querySelector(s);
+    async function api(path, opts = {}) {
+      const res = await fetch(path, {
+        credentials: "include",
+        headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+        ...opts,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401) { location.href = "/login.html"; throw new Error("auth"); }
+      if (res.status === 403) { throw new Error(data.detail || data.error || "Admin only"); }
+      if (!res.ok) throw new Error(data.detail || data.error || res.statusText);
+      return data;
+    }
+    function show(el, text, ok) {
+      el.hidden = !text;
+      el.textContent = text || "";
+      el.className = "msg " + (ok ? "ok" : "err");
+    }
+    function usageStr(u) {
+      if (!u) return "—";
+      return `c${u.coach||0} v${u.vision||0} i${u.imagine||0}`;
+    }
+    async function load() {
+      const me = await api("/api/admin/me");
+      $("#who").textContent = `${me.admin.email} · id ${me.admin.id} · allowlist [${me.admin_ids.join(", ")}]`;
+      const data = await api("/api/admin/users");
+      $("#day-label").textContent = "Usage day (UTC): " + data.day;
+      $("#q-coach").value = data.quotas.coach;
+      $("#q-vision").value = data.quotas.vision;
+      $("#q-imagine").value = data.quotas.imagine;
+      const tb = $("#users-body");
+      tb.innerHTML = "";
+      for (const u of data.users) {
+        const tr = document.createElement("tr");
+        if (!u.is_active) tr.classList.add("pill-off");
+        tr.innerHTML = `
+          <td class="mono">${u.id}${u.is_admin ? " ★" : ""}</td>
+          <td>${u.email}${u.name ? `<div class="hint">${u.name}</div>` : ""}
+            <div class="hint">${u.is_active ? "active" : "DISABLED"} · ${u.has_password ? "pw" : ""}${u.has_google ? " google" : ""}</div>
+          </td>
+          <td class="mono">${u.weights} wt · ${u.photos} ph</td>
+          <td class="mono">${usageStr(u.usage_today)}</td>
+          <td style="white-space:nowrap;"></td>`;
+        const actions = tr.lastElementChild;
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "btn ghost";
+        toggle.textContent = u.is_active ? "Disable" : "Enable";
+        toggle.disabled = u.is_admin;
+        toggle.title = u.is_admin ? "Admin allowlist users stay active" : "";
+        toggle.addEventListener("click", async () => {
+          try {
+            await api(`/api/admin/users/${u.id}/active`, {
+              method: "POST",
+              body: JSON.stringify({ is_active: !u.is_active }),
+            });
+            show($("#users-msg"), "Updated " + u.email, true);
+            await load();
+          } catch (e) {
+            show($("#users-msg"), e.message, false);
+          }
+        });
+        const reset = document.createElement("button");
+        reset.type = "button";
+        reset.className = "btn";
+        reset.textContent = "Reset usage";
+        reset.style.marginLeft = "6px";
+        reset.addEventListener("click", async () => {
+          try {
+            await api(`/api/admin/users/${u.id}/reset-usage`, { method: "POST", body: "{}" });
+            show($("#users-msg"), "Reset usage for " + u.email, true);
+            await load();
+          } catch (e) {
+            show($("#users-msg"), e.message, false);
+          }
+        });
+        actions.appendChild(toggle);
+        actions.appendChild(reset);
+        tb.appendChild(tr);
+      }
+    }
+    $("#quota-form").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      try {
+        await api("/api/admin/quotas", {
+          method: "PUT",
+          body: JSON.stringify({
+            coach: Number($("#q-coach").value),
+            vision: Number($("#q-vision").value),
+            imagine: Number($("#q-imagine").value),
+          }),
+        });
+        show($("#quota-msg"), "Quotas saved", true);
+        await load();
+      } catch (e) {
+        show($("#quota-msg"), e.message, false);
+      }
+    });
+    $("#btn-refresh").addEventListener("click", () => load().catch((e) => show($("#users-msg"), e.message, false)));
+    $("#btn-logout").addEventListener("click", async () => {
+      await api("/api/auth/logout", { method: "POST", body: "{}" });
+      location.href = "/login.html";
+    });
+    load().catch((e) => {
+      show($("#users-msg"), e.message, false);
+      if (String(e.message).includes("Admin")) {
+        setTimeout(() => { location.href = "/"; }, 1500);
+      }
+    });
+  </script>
+</body>
+</html>

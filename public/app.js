@@ -113,6 +113,11 @@
   }
 
   async function loadAll() {
+    try {
+      const me = await api("/api/auth/me");
+      const adminLink = $("#admin-link");
+      if (adminLink) adminLink.hidden = !(me.user && me.user.is_admin);
+    } catch (_) {}
     const [trend, sets] = await Promise.all([
       api("/api/trend"),
       api("/api/settings"),
@@ -145,19 +150,21 @@
       koboldOk = !!st.ok;
       if (!pill) return;
       if (st.ok) {
-        const short = (st.model || "kobold").replace(/^koboldcpp\//, "");
-        pill.textContent = `LLM · ${short}`;
-        pill.title = `${st.model || "Kobold"} @ ${st.url || ""}`;
+        const short = (st.model || "grok").replace(/^grok-/, "grok-");
+        const u = st.usage_today || {};
+        const lim = st.limits || {};
+        pill.textContent = `Grok · ${short}`;
+        pill.title = `coach ${u.coach || 0}/${lim.coach ?? "?"} today · ${st.model || "xAI"}`;
         pill.className = "kobold-pill up";
       } else {
-        pill.textContent = "LLM offline";
-        pill.title = st.error || "Kobold not reachable";
+        pill.textContent = "Grok offline";
+        pill.title = st.error || "XAI_API_KEY not configured";
         pill.className = "kobold-pill down";
       }
     } catch (e) {
       koboldOk = false;
       if (pill) {
-        pill.textContent = "LLM offline";
+        pill.textContent = "Grok offline";
         pill.title = e.message;
         pill.className = "kobold-pill down";
       }
@@ -167,12 +174,11 @@
   async function loadCachedCoach() {
     try {
       const data = await api("/api/coach");
-      if (data.kobold) {
-        koboldOk = !!data.kobold.ok;
+      if (data.status) {
+        koboldOk = !!data.status.ok;
         const pill = $("#kobold-pill");
-        if (pill && data.kobold.ok) {
-          const short = (data.kobold.model || "kobold").replace(/^koboldcpp\//, "");
-          pill.textContent = `LLM · ${short}`;
+        if (pill && data.status.ok) {
+          pill.textContent = `Grok · ${data.status.model || "xai"}`;
           pill.className = "kobold-pill up";
         }
       }
@@ -201,15 +207,16 @@
       if (opts.celebrate !== false && aiCoach?.toast) {
         burstFX(aiCoach.toast);
       }
+      await refreshKoboldStatus();
       return aiCoach;
     } catch (e) {
       const msg = $("#form-msg");
       if (msg) {
-        msg.textContent = "Kobold coach failed: " + e.message;
+        msg.textContent = "Coach failed: " + e.message;
         msg.className = "hint err";
         msg.hidden = false;
       } else {
-        alert("Kobold coach failed: " + e.message);
+        alert("Coach failed: " + e.message);
       }
       await refreshKoboldStatus();
       throw e;
@@ -236,7 +243,7 @@
       if (aiCoach.generated_at) {
         bits.push(String(aiCoach.generated_at).replace("T", " ").replace("+00:00", "Z"));
       }
-      meta.textContent = bits.length ? "via Kobold · " + bits.join(" · ") : "";
+      meta.textContent = bits.length ? "via Grok · " + bits.join(" · ") : "";
       meta.hidden = !bits.length;
     }
   }
@@ -1197,6 +1204,13 @@
     a.download = `trend-${todayISO()}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  });
+
+  $("#btn-logout")?.addEventListener("click", async () => {
+    try {
+      await api("/api/auth/logout", { method: "POST", body: "{}" });
+    } catch (_) {}
+    location.href = "/login.html";
   });
 
   // AI coach controls

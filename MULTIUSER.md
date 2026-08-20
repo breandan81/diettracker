@@ -49,7 +49,9 @@ Google OAuth: set `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` and redirect
 - [x] B0 clone + port 8511
 - [x] B1 FastAPI + models (+ SQLite bootstrap / Postgres-ready)
 - [x] B2 Auth (email + Google routes) + user-scoped trend/settings/photos + data migrate
-- [ ] B3 Admin UI
-- [ ] B4–B5 Grok coach + quotas
+- [x] B3 Admin UI (`/admin`) — users, disable, reset usage, quota defaults
+- [x] B4–B5 Grok coach (no Kobold) + daily coach quota enforcement
 - [ ] B6–B7 Ingest tokens + About / ESP zip
 - [ ] B8 Linode deploy scripts
+
+Admin: http://127.0.0.1:8511/admin (allowlist `ADMIN_USER_IDS`)

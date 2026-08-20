@@ -28,3 +28,11 @@ def get_optional_user(request: Request, db: Session = Depends(get_db)) -> User |
     if not user or not user.is_active:
         return None
     return user
+
+
+def require_admin(user: User = Depends(get_current_user)) -> User:
+    from app.config import get_settings
+
+    if user.id not in get_settings().admin_ids:
+        raise HTTPException(status_code=403, detail="Admin only")
+    return user

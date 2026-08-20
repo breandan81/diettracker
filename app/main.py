@@ -9,6 +9,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import get_settings
 from app.db import init_db
+from app.routers import admin as admin_router
 from app.routers import auth as auth_router
 from app.routers import data as data_router
 
@@ -25,6 +26,7 @@ app.add_middleware(
 
 app.include_router(auth_router.router)
 app.include_router(data_router.router)
+app.include_router(admin_router.router)
 
 
 @app.on_event("startup")
@@ -74,6 +76,13 @@ if settings.public_dir.is_dir():
     @app.get("/login.html")
     def login_page():
         return FileResponse(settings.public_dir / "login.html")
+
+    @app.get("/admin")
+    @app.get("/admin.html")
+    def admin_page(request: Request):
+        if not request.session.get("user_id"):
+            return RedirectResponse("/login.html")
+        return FileResponse(settings.public_dir / "admin.html")
 
     @app.get("/favicon.ico")
     def favicon_ico():
