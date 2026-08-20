@@ -25,11 +25,30 @@ docker compose up -d
 
 Work happens on `multi-user`. Do not run this against the live `data/weights.db`.
 
+## Login (after migrate)
+
+```bash
+# Import personal data from the live single-user DB (does not modify live DB):
+.venv/bin/python scripts/migrate_from_sqlite.py \
+  --sqlite ~/AIML/claude/hackers-diet/data/weights.db \
+  --photos-dir ~/AIML/claude/hackers-diet/data/photos \
+  --email breandan@example.com \
+  --password 'DevTrend123!' \
+  --name Breandan
+```
+
+Then open http://127.0.0.1:8511/login.html  
+Default migrated account: `breandan@example.com` / `DevTrend123!`  
+Set `ADMIN_USER_IDS=1` in `secrets.env`.
+
+Google OAuth: set `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` and redirect  
+`http://127.0.0.1:8511/api/auth/google/callback`.
+
 ## Roadmap (from plan)
 
 - [x] B0 clone + port 8511
 - [x] B1 FastAPI + models (+ SQLite bootstrap / Postgres-ready)
-- [ ] B2 Auth (email + Google)
+- [x] B2 Auth (email + Google routes) + user-scoped trend/settings/photos + data migrate
 - [ ] B3 Admin UI
 - [ ] B4–B5 Grok coach + quotas
 - [ ] B6–B7 Ingest tokens + About / ESP zip

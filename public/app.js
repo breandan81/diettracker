@@ -88,11 +88,16 @@
 
   async function api(path, opts = {}) {
     const res = await fetch(path, {
+      credentials: "include",
       headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
       ...opts,
     });
+    if (res.status === 401) {
+      location.href = "/login.html";
+      throw new Error("Not authenticated");
+    }
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || res.statusText || "request failed");
+    if (!res.ok) throw new Error(data.error || data.detail || res.statusText || "request failed");
     return data;
   }
 

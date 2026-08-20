@@ -31,7 +31,7 @@ class Settings(BaseSettings):
 
     google_client_id: str = ""
     google_client_secret: str = ""
-    google_redirect_uri: str = "http://127.0.0.1:8511/auth/google/callback"
+    google_redirect_uri: str = "http://127.0.0.1:8511/api/auth/google/callback"
 
     daily_limit_coach: int = 20
     daily_limit_vision: int = 10

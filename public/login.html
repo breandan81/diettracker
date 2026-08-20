@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>τrend — sign in</title>
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="stylesheet" href="/style.css?v=30" />
+  <style>
+    .auth-wrap { max-width: 420px; margin: 48px auto; padding: 0 20px; }
+    .auth-card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 22px 20px 20px;
+    }
+    .auth-card h1 { font-size: 22px; margin: 0 0 6px; }
+    .auth-card .sub { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+    .auth-card label { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; font-size: 13px; color: var(--muted); }
+    .auth-card input {
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 10px 12px;
+      font-size: 14px;
+    }
+    .auth-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; align-items: center; }
+    .auth-msg { margin-top: 12px; font-size: 13px; }
+    .auth-msg.err { color: var(--danger); }
+    .auth-msg.ok { color: var(--accent-2); }
+    .auth-divider { text-align: center; color: var(--muted); font-size: 12px; margin: 16px 0 12px; }
+  </style>
+</head>
+<body>
+  <div class="auth-wrap">
+    <div style="text-align:center;margin-bottom:16px;">
+      <img src="/img/trend-banner.png" alt="τrend" style="height:72px;width:auto;max-width:90%;" />
+    </div>
+    <div class="auth-card">
+      <h1>Sign in</h1>
+      <p class="sub">Multi-user τrend (dev on :8511). Your personal LAN app remains on :8510.</p>
+      <form id="login-form">
+        <label>Email <input type="email" id="email" required autocomplete="username" value="breandan@example.com" /></label>
+        <label>Password <input type="password" id="password" required autocomplete="current-password" /></label>
+        <div class="auth-actions">
+          <button type="submit" class="btn primary">Sign in</button>
+          <button type="button" class="btn ghost" id="btn-register">Create account</button>
+        </div>
+      </form>
+      <div class="auth-divider">or</div>
+      <a class="btn" href="/api/auth/google/start" id="google-link">Continue with Google</a>
+      <p class="auth-msg" id="msg" hidden></p>
+    </div>
+  </div>
+  <script>
+    const $ = (s) => document.querySelector(s);
+    const msg = $("#msg");
+    function show(text, ok) {
+      msg.hidden = false;
+      msg.textContent = text;
+      msg.className = "auth-msg " + (ok ? "ok" : "err");
+    }
+    async function post(path, body) {
+      const res = await fetch(path, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || data.error || res.statusText);
+      return data;
+    }
+    $("#login-form").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      try {
+        await post("/api/auth/login", {
+          email: $("#email").value,
+          password: $("#password").value,
+        });
+        location.href = "/";
+      } catch (e) {
+        show(e.message, false);
+      }
+    });
+    $("#btn-register").addEventListener("click", async () => {
+      try {
+        await post("/api/auth/register", {
+          email: $("#email").value,
+          password: $("#password").value,
+          name: "Breandan",
+        });
+        location.href = "/";
+      } catch (e) {
+        show(e.message, false);
+      }
+    });
+    // Hide Google if not configured
+    fetch("/api/health").then(r => r.json()).then(h => {
+      if (!h.google_oauth) {
+        $("#google-link").style.display = "none";
+        document.querySelector(".auth-divider").style.display = "none";
+      }
+    });
+  </script>
+</body>
+</html>

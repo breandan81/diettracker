@@ -16,9 +16,16 @@
   }
 
   async function api(path, opts = {}) {
-    const res = await fetch(path, opts);
+    const res = await fetch(path, {
+      credentials: "include",
+      ...opts,
+    });
+    if (res.status === 401) {
+      location.href = "/login.html";
+      throw new Error("Not authenticated");
+    }
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || res.statusText || "request failed");
+    if (!res.ok) throw new Error(data.error || data.detail || res.statusText || "request failed");
     return data;
   }
 
@@ -477,7 +484,7 @@
     btn.textContent = $("#p-analyze").checked ? "Uploading + analyzing…" : "Uploading…";
     msg.hidden = true;
     try {
-      const res = await fetch("/api/photos", { method: "POST", body: fd });
+      const res = await fetch("/api/photos", { method: "POST", body: fd, credentials: "include" });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || res.statusText);
       photos = data.photos || [];
