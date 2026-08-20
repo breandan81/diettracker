@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -117,11 +117,79 @@ def weights_create(
 
 @router.get("/api/photos")
 def photos_list(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.photos_access import photos_feature_enabled, user_can_upload_photos
+
     rows = db.scalars(
         select(Photo).where(Photo.user_id == user.id).order_by(Photo.date.desc(), Photo.id.desc())
     ).all()
-    return {"photos": [photo_to_dict(p) for p in rows]}
+    return {
+        "photos": [photo_to_dict(p) for p in rows],
+        "photos_allowed": user_can_upload_photos(db, user),
+        "photos_feature_enabled": photos_feature_enabled(db),
+    }
 
+
+@router.post("/api/photos")
+async def photos_create(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Upload a progress photo. Invite-only; no auto Grok analyze yet on multi-user."""
+    import uuid
+    from datetime import date as date_cls
+
+    from fastapi import UploadFile
+    from app.photos_access import require_photos_allowed
+
+    require_photos_allowed(db, user)
+
+    form = await request.form()
+    file = form.get("file")
+    if file is None or not hasattr(file, "read"):
+        raise HTTPException(status_code=400, detail="file required")
+    raw = await file.read()  # type: ignore[union-attr]
+    if not raw:
+        raise HTTPException(status_code=400, detail="empty file")
+    if len(raw) > 12 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="file too large (max 12MB)")
+
+    mime = getattr(file, "content_type", None) or "image/jpeg"
+    if mime not in ("image/jpeg", "image/jpg", "image/png"):
+        raise HTTPException(status_code=400, detail="only jpeg/png supported")
+
+    d = str(form.get("date") or date_cls.today().isoformat())[:10]
+    note = str(form.get("note") or "")[:200] or None
+    # Ignore analyze=1 for now on multi-user (moderation not wired)
+    ext = ".png" if "png" in mime else ".jpg"
+    fname = f"{d}_{uuid.uuid4().hex[:10]}{ext}"
+    dest_dir = settings.data_dir / "photos" / str(user.id)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    (dest_dir / fname).write_bytes(raw)
+
+    photo = Photo(
+        user_id=user.id,
+        date=d,
+        filename=fname,
+        mime=mime,
+        note=note,
+    )
+    db.add(photo)
+    db.commit()
+    db.refresh(photo)
+    return {
+        "ok": True,
+        "photo": photo_to_dict(photo),
+        "photos": [
+            photo_to_dict(p)
+            for p in db.scalars(
+                select(Photo)
+                .where(Photo.user_id == user.id)
+                .order_by(Photo.date.desc(), Photo.id.desc())
+            ).all()
+        ],
+        "note": "Stored privately. Grok analyze is invite-gated and not auto-run on multi-user yet.",
+    }
 
 @router.get("/api/photos/series")
 def photos_series(user: User = Depends(get_current_user), db: Session = Depends(get_db)):

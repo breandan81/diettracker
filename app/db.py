@@ -49,5 +49,18 @@ def get_db() -> Generator[Session, None, None]:
 def init_db() -> None:
     # Import models so metadata is populated
     from app import models  # noqa: F401
+    from sqlalchemy import inspect, text
 
     Base.metadata.create_all(bind=engine)
+
+    # Lightweight SQLite column add for existing dev DBs
+    if str(engine.url).startswith("sqlite"):
+        with engine.begin() as conn:
+            cols = {c["name"] for c in inspect(conn).get_columns("users")}
+            if "photos_allowed" not in cols:
+                conn.execute(
+                    text(
+                        "ALTER TABLE users ADD COLUMN photos_allowed BOOLEAN "
+                        "DEFAULT 0 NOT NULL"
+                    )
+                )

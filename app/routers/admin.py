@@ -60,13 +60,22 @@ def list_users(admin: User = Depends(require_admin), db: Session = Depends(get_d
                 "is_admin": u.id in settings.admin_ids,
                 "has_password": bool(u.password_hash),
                 "has_google": bool(u.google_sub),
+                "photos_allowed": bool(getattr(u, "photos_allowed", False))
+                or (u.id in settings.admin_ids),
                 "created_at": u.created_at.isoformat() if u.created_at else None,
                 "weights": int(weight_counts.get(u.id, 0)),
                 "photos": int(photo_counts.get(u.id, 0)),
                 "usage_today": usage,
             }
         )
-    return {"users": out, "quotas": get_quota_limits(db), "day": today.isoformat()}
+    from app.photos_access import photos_feature_enabled
+
+    return {
+        "users": out,
+        "quotas": get_quota_limits(db),
+        "day": today.isoformat(),
+        "photos_feature_enabled": photos_feature_enabled(db),
+    }
 
 
 @router.post("/users/{user_id}/active")
@@ -116,3 +125,96 @@ def quotas_put(
     patch = body.model_dump(exclude_unset=True)
     current.update(patch)
     return {"quotas": set_quota_limits(db, current)}
+
+
+class PhotosAllowedBody(BaseModel):
+    photos_allowed: bool
+
+
+@router.post("/users/{user_id}/photos-allowed")
+def set_photos_allowed(
+    user_id: int,
+    body: PhotosAllowedBody,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.photos_allowed = body.photos_allowed
+    db.commit()
+    return {"ok": True, "id": user.id, "photos_allowed": user.photos_allowed}
+
+
+class PhotosFeatureBody(BaseModel):
+    enabled: bool
+
+
+@router.post("/photos-feature")
+def set_photos_feature(
+    body: PhotosFeatureBody,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    from app.photos_access import set_photos_feature_enabled
+
+    enabled = set_photos_feature_enabled(db, body.enabled)
+    return {"ok": True, "photos_feature_enabled": enabled}
+
+
+class CreateInviteBody(BaseModel):
+    label: str | None = None
+    max_uses: int = Field(1, ge=1, le=1000)
+
+
+@router.post("/photo-invites")
+def create_photo_invite(
+    body: CreateInviteBody,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    import secrets
+
+    from app.auth_utils import hash_token
+    from app.models import PhotoInvite
+
+    raw = secrets.token_urlsafe(12)
+    inv = PhotoInvite(
+        code_hash=hash_token(raw),
+        code_prefix=raw[:6],
+        label=body.label,
+        max_uses=body.max_uses,
+        created_by=admin.id,
+    )
+    db.add(inv)
+    db.commit()
+    db.refresh(inv)
+    return {
+        "ok": True,
+        "id": inv.id,
+        "code": raw,  # shown once
+        "label": inv.label,
+        "max_uses": inv.max_uses,
+        "prefix": inv.code_prefix,
+    }
+
+
+@router.get("/photo-invites")
+def list_photo_invites(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    from app.models import PhotoInvite
+
+    rows = db.scalars(select(PhotoInvite).order_by(PhotoInvite.id.desc())).all()
+    return {
+        "invites": [
+            {
+                "id": r.id,
+                "prefix": r.code_prefix,
+                "label": r.label,
+                "uses": r.uses,
+                "max_uses": r.max_uses,
+                "revoked": r.revoked,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ]
+    }

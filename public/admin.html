@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>τrend — admin</title>
   <link rel="icon" href="/favicon.ico" sizes="any" />
-  <link rel="stylesheet" href="/style.css?v=30" />
+  <link rel="stylesheet" href="/style.css?v=31" />
   <style>
     .admin-wrap { max-width: 1100px; margin: 24px auto 48px; padding: 0 20px; }
     .admin-head { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 16px; }
@@ -76,6 +76,19 @@
         </form>
         <p class="msg" id="quota-msg" hidden></p>
         <p class="hint" id="day-label"></p>
+
+        <h2 style="margin-top:20px;">Photo uploads (invite-only)</h2>
+        <p class="hint">Until monetized/moderated: users need <code>photos_allowed</code> or a redeemable invite. Admins always allowed.</p>
+        <label class="check" style="flex-direction:row;gap:8px;align-items:center;">
+          <input type="checkbox" id="photos-feature" />
+          <span>Photos feature enabled globally</span>
+        </label>
+        <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <input type="text" id="invite-label" placeholder="Invite label (optional)" style="flex:1;min-width:140px;background:var(--panel-2);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px;" />
+          <button type="button" class="btn primary" id="btn-invite">Create photo invite</button>
+        </div>
+        <p class="msg" id="invite-msg" hidden></p>
+        <pre class="mono" id="invite-list" style="margin-top:10px;white-space:pre-wrap;font-size:11px;color:var(--muted);"></pre>
       </section>
     </div>
   </div>
@@ -119,7 +132,7 @@
         tr.innerHTML = `
           <td class="mono">${u.id}${u.is_admin ? " ★" : ""}</td>
           <td>${u.email}${u.name ? `<div class="hint">${u.name}</div>` : ""}
-            <div class="hint">${u.is_active ? "active" : "DISABLED"} · ${u.has_password ? "pw" : ""}${u.has_google ? " google" : ""}</div>
+            <div class="hint">${u.is_active ? "active" : "DISABLED"} · ${u.has_password ? "pw" : ""}${u.has_google ? " google" : ""} · photos ${u.photos_allowed ? "ON" : "off"}</div>
           </td>
           <td class="mono">${u.weights} wt · ${u.photos} ph</td>
           <td class="mono">${usageStr(u.usage_today)}</td>
@@ -143,9 +156,28 @@
             show($("#users-msg"), e.message, false);
           }
         });
+        const photosBtn = document.createElement("button");
+        photosBtn.type = "button";
+        photosBtn.className = "btn";
+        photosBtn.textContent = u.photos_allowed ? "Revoke photos" : "Allow photos";
+        photosBtn.style.marginLeft = "6px";
+        photosBtn.disabled = u.is_admin;
+        photosBtn.title = u.is_admin ? "Admins always have photo access" : "";
+        photosBtn.addEventListener("click", async () => {
+          try {
+            await api(`/api/admin/users/${u.id}/photos-allowed`, {
+              method: "POST",
+              body: JSON.stringify({ photos_allowed: !u.photos_allowed }),
+            });
+            show($("#users-msg"), "Photo access updated for " + u.email, true);
+            await load();
+          } catch (e) {
+            show($("#users-msg"), e.message, false);
+          }
+        });
         const reset = document.createElement("button");
         reset.type = "button";
-        reset.className = "btn";
+        reset.className = "btn ghost";
         reset.textContent = "Reset usage";
         reset.style.marginLeft = "6px";
         reset.addEventListener("click", async () => {
@@ -158,9 +190,15 @@
           }
         });
         actions.appendChild(toggle);
+        actions.appendChild(photosBtn);
         actions.appendChild(reset);
         tb.appendChild(tr);
       }
+      $("#photos-feature").checked = !!data.photos_feature_enabled;
+      const inv = await api("/api/admin/photo-invites");
+      $("#invite-list").textContent = (inv.invites || [])
+        .map((i) => `#${i.id} ${i.prefix}… uses ${i.uses}/${i.max_uses}${i.revoked ? " REVOKED" : ""} ${i.label || ""}`)
+        .join("\n") || "(no invites yet)";
     }
     $("#quota-form").addEventListener("submit", async (ev) => {
       ev.preventDefault();
@@ -177,6 +215,35 @@
         await load();
       } catch (e) {
         show($("#quota-msg"), e.message, false);
+      }
+    });
+    $("#photos-feature")?.addEventListener("change", async (ev) => {
+      try {
+        await api("/api/admin/photos-feature", {
+          method: "POST",
+          body: JSON.stringify({ enabled: !!ev.target.checked }),
+        });
+        show($("#invite-msg"), "Photos feature " + (ev.target.checked ? "enabled" : "disabled"), true);
+      } catch (e) {
+        show($("#invite-msg"), e.message, false);
+        ev.target.checked = !ev.target.checked;
+      }
+    });
+    $("#btn-invite")?.addEventListener("click", async () => {
+      try {
+        const data = await api("/api/admin/photo-invites", {
+          method: "POST",
+          body: JSON.stringify({ label: $("#invite-label").value || null, max_uses: 1 }),
+        });
+        show(
+          $("#invite-msg"),
+          "Invite created — copy now (shown once): " + data.code,
+          true
+        );
+        $("#invite-label").value = "";
+        await load();
+      } catch (e) {
+        show($("#invite-msg"), e.message, false);
       }
     });
     $("#btn-refresh").addEventListener("click", () => load().catch((e) => show($("#users-msg"), e.message, false)));

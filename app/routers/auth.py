@@ -15,7 +15,7 @@ from app.auth_utils import hash_password, verify_password
 from app.config import get_settings
 from app.db import get_db
 from app.deps import get_current_user, get_optional_user
-from app.models import User
+from app.models import PhotoInvite, User
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 settings = get_settings()
@@ -32,13 +32,23 @@ class LoginBody(BaseModel):
     password: str = Field(min_length=1, max_length=72)
 
 
-def _user_public(user: User) -> dict:
-    return {
+def _user_public(user: User, db: Session | None = None) -> dict:
+    photos_allowed = bool(getattr(user, "photos_allowed", False))
+    if user.id in settings.admin_ids:
+        photos_allowed = True
+    out = {
         "id": user.id,
         "email": user.email,
         "name": user.name,
         "is_admin": user.id in settings.admin_ids,
+        "photos_allowed": photos_allowed,
     }
+    if db is not None:
+        from app.photos_access import photos_feature_enabled, user_can_upload_photos
+
+        out["photos_feature_enabled"] = photos_feature_enabled(db)
+        out["photos_allowed"] = user_can_upload_photos(db, user)
+    return out
 
 
 @router.post("/register")
@@ -51,12 +61,13 @@ def register(body: RegisterBody, request: Request, db: Session = Depends(get_db)
         email=email,
         password_hash=hash_password(body.password),
         name=(body.name or "").strip() or None,
+        photos_allowed=False,
     )
     db.add(user)
     db.commit()
     db.refresh(user)
     request.session["user_id"] = user.id
-    return {"ok": True, "user": _user_public(user)}
+    return {"ok": True, "user": _user_public(user, db)}
 
 
 @router.post("/login")
@@ -68,7 +79,7 @@ def login(body: LoginBody, request: Request, db: Session = Depends(get_db)):
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account disabled")
     request.session["user_id"] = user.id
-    return {"ok": True, "user": _user_public(user)}
+    return {"ok": True, "user": _user_public(user, db)}
 
 
 @router.post("/logout")
@@ -78,10 +89,50 @@ def logout(request: Request):
 
 
 @router.get("/me")
-def me(user: User | None = Depends(get_optional_user)):
+def me(
+    user: User | None = Depends(get_optional_user),
+    db: Session = Depends(get_db),
+):
     if not user:
         return {"user": None}
-    return {"user": _user_public(user)}
+    return {"user": _user_public(user, db)}
+
+
+class RedeemInviteBody(BaseModel):
+    code: str
+
+
+@router.post("/redeem-photo-invite")
+def redeem_photo_invite(
+    body: RedeemInviteBody,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from app.auth_utils import hash_token
+    from app.photos_access import photos_feature_enabled
+
+    if not photos_feature_enabled(db):
+        raise HTTPException(status_code=403, detail="Photo uploads are disabled globally")
+    if user.photos_allowed or user.id in settings.admin_ids:
+        return {"ok": True, "photos_allowed": True, "message": "Already allowed"}
+
+    code = (body.code or "").strip()
+    if len(code) < 8:
+        raise HTTPException(status_code=400, detail="Invalid invite code")
+    inv = db.scalar(select(PhotoInvite).where(PhotoInvite.code_hash == hash_token(code)))
+    if not inv or inv.revoked:
+        raise HTTPException(status_code=400, detail="Invalid or revoked invite code")
+    if inv.uses >= inv.max_uses:
+        raise HTTPException(status_code=400, detail="Invite code already used up")
+
+    inv.uses = int(inv.uses or 0) + 1
+    user.photos_allowed = True
+    db.commit()
+    return {
+        "ok": True,
+        "photos_allowed": True,
+        "message": "Photo uploads unlocked for your account",
+    }
 
 
 @router.get("/google/start")

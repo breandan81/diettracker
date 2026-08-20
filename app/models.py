@@ -30,6 +30,8 @@ class User(Base):
     google_sub: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
     name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    # Photo upload/analyze/Imagine — invite-only until monetized / moderation exists
+    photos_allowed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -142,3 +144,23 @@ class AppConfig(Base):
 
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
     value: Mapped[str] = mapped_column(Text, default="")
+
+
+class PhotoInvite(Base):
+    """One-time (or multi-use) codes that grant photos_allowed."""
+
+    __tablename__ = "photo_invites"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code_hash: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    code_prefix: Mapped[str] = mapped_column(String(16), default="")  # for admin display
+    label: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    max_uses: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    uses: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")

@@ -302,6 +302,17 @@
         <h2>Log progress photo</h2>
         <span class="pill" id="xai-pill-2">Vision …</span>
       </div>
+      <p class="hint" id="photo-invite-gate">
+        Photo uploads are <strong>invite-only</strong> until moderation exists.
+        Redeem a code from an admin, or ask them to enable photos on your account.
+      </p>
+      <form id="photo-invite-form" class="photo-form" style="margin-bottom:12px;">
+        <label class="grow">
+          <span>Photo invite code</span>
+          <input type="text" id="photo-invite-code" placeholder="paste invite code" autocomplete="off" />
+        </label>
+        <button type="submit" class="btn" id="photo-invite-submit">Unlock uploads</button>
+      </form>
       <form id="photo-form" class="photo-form">
         <label>
           <span>Date</span>
@@ -316,8 +327,8 @@
           <input type="text" id="p-note" maxlength="200" placeholder="morning, lighting, …" />
         </label>
         <label class="check">
-          <input type="checkbox" id="p-analyze" checked />
-          <span>Analyze with Grok</span>
+          <input type="checkbox" id="p-analyze" />
+          <span>Analyze with Grok <em class="muted">(not auto on multi-user yet)</em></span>
         </label>
         <button type="submit" class="btn primary" id="p-submit">Upload</button>
       </form>

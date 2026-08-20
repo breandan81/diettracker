@@ -9,6 +9,7 @@
   let activePhotoId = null;
   let weightSeries = []; // [{date, weight|trend}]
   let heightIn = null;
+  let photosAllowed = false;
 
   function fmt(n, d = 1) {
     if (n == null || Number.isNaN(n)) return "—";
@@ -29,6 +30,25 @@
     return data;
   }
 
+  function applyPhotosAccessUI() {
+    const form = $("#photo-form");
+    const gate = $("#photo-invite-gate");
+    const inviteForm = $("#photo-invite-form");
+    if (form) form.style.display = photosAllowed ? "" : "none";
+    if (gate) gate.style.display = photosAllowed ? "none" : "";
+    if (inviteForm) inviteForm.style.display = photosAllowed ? "none" : "";
+  }
+
+  async function refreshPhotosAccess() {
+    try {
+      const me = await api("/api/auth/me");
+      photosAllowed = !!(me.user && me.user.photos_allowed);
+    } catch (_) {
+      photosAllowed = false;
+    }
+    applyPhotosAccessUI();
+  }
+
   function setView(name) {
     const tracker = $("#view-tracker");
     const photosView = $("#view-photos");
@@ -39,8 +59,9 @@
     $$("#view-tabs .view-tab").forEach((b) => {
       b.classList.toggle("active", b.dataset.view === name);
     });
-    if (isPhotos) renderGallery();
-    else renderVisualChart();
+    if (isPhotos) {
+      refreshPhotosAccess().then(() => renderGallery());
+    } else renderVisualChart();
     try {
       history.replaceState(null, "", isPhotos ? "#photos" : "#tracker");
     } catch (_) {}
@@ -104,6 +125,8 @@
       ]);
       photos = plist.photos || [];
       photoSeries = series.series || [];
+      if (plist.photos_allowed != null) photosAllowed = !!plist.photos_allowed;
+      applyPhotosAccessUI();
       setXaiPill(vst);
       renderGallery();
       renderVisualChart();
@@ -468,9 +491,42 @@
     wrap.hidden = false;
   });
 
+  $("#photo-invite-form")?.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const msg = $("#photo-msg");
+    try {
+      const data = await api("/api/auth/redeem-photo-invite", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: $("#photo-invite-code").value }),
+      });
+      photosAllowed = !!data.photos_allowed;
+      applyPhotosAccessUI();
+      if (msg) {
+        msg.textContent = data.message || "Photo uploads unlocked";
+        msg.className = "hint ok";
+        msg.hidden = false;
+      }
+    } catch (e) {
+      if (msg) {
+        msg.textContent = e.message;
+        msg.className = "hint err";
+        msg.hidden = false;
+      } else alert(e.message);
+    }
+  });
+
   $("#photo-form")?.addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const msg = $("#photo-msg");
+    if (!photosAllowed) {
+      if (msg) {
+        msg.textContent = "Photo uploads are invite-only";
+        msg.className = "hint err";
+        msg.hidden = false;
+      }
+      return;
+    }
     const file = $("#p-file").files?.[0];
     if (!file) return;
     const fd = new FormData();
@@ -486,7 +542,7 @@
     try {
       const res = await fetch("/api/photos", { method: "POST", body: fd, credentials: "include" });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || res.statusText);
+      if (!res.ok) throw new Error(data.error || data.detail || res.statusText);
       photos = data.photos || [];
       photoSeries = data.photo_series || [];
       setXaiPill(data.xai);
