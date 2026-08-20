@@ -138,6 +138,8 @@ def create_photo(
     note: Optional[str],
     now_iso: str,
     analyze: bool = True,
+    sex: Optional[str] = None,
+    age: Optional[int] = None,
 ) -> dict:
     d = parse_date(taken_date).isoformat()
     ext = {".jpg", ".jpeg", ".png"}
@@ -170,7 +172,7 @@ def create_photo(
         "model": None,
     }
     if analyze:
-        analysis = analyze_image_file(path, mime)
+        analysis = analyze_image_file(path, mime, sex=sex, age=age)
         meta = analysis.pop("_meta", {})
         fields["analysis_json"] = json.dumps(analysis)
         bmi = analysis.get("bmi_estimate") or {}
@@ -219,14 +221,22 @@ def create_photo(
     return get_photo(conn, int(cur.lastrowid))  # type: ignore[arg-type]
 
 
-def reanalyze_photo(conn: sqlite3.Connection, data_dir: Path, pid: int, now_iso: str) -> dict:
+def reanalyze_photo(
+    conn: sqlite3.Connection,
+    data_dir: Path,
+    pid: int,
+    now_iso: str,
+    *,
+    sex: Optional[str] = None,
+    age: Optional[int] = None,
+) -> dict:
     row = conn.execute("SELECT * FROM photos WHERE id = ?", (pid,)).fetchone()
     if not row:
         raise KeyError("not found")
     path = photos_dir(data_dir) / row["filename"]
     if not path.is_file():
         raise FileNotFoundError(row["filename"])
-    analysis = analyze_image_file(path, row["mime"])
+    analysis = analyze_image_file(path, row["mime"], sex=sex, age=age)
     meta = analysis.pop("_meta", {})
     bmi = analysis.get("bmi_estimate") or {}
     app = analysis.get("appearance_rating") or {}
@@ -294,6 +304,8 @@ def save_goal_projection(
     current_bmi: Optional[float],
     goal_bmi: Optional[float],
     now_iso: str,
+    sex: Optional[str] = None,
+    age: Optional[int] = None,
 ) -> dict:
     """Run Imagine edit and store projection next to the source photo."""
     from imagine import edit_image_to_goal
@@ -327,6 +339,8 @@ def save_goal_projection(
         current_bmi=current_bmi,
         goal_bmi=goal_bmi,
         appearance_notes=notes,
+        sex=sex,
+        age=age,
     )
 
     # remove prior projection file if any

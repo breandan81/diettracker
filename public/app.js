@@ -117,12 +117,48 @@
     render();
   }
 
+  function applyPhotosNav(user) {
+    // Hide Photos chrome unless the feature is on AND this account may use it.
+    // (Admins always allowed server-side; me.photos_allowed already reflects that.)
+    const enabled =
+      !!(user && user.photos_feature_enabled !== false && user.photos_allowed);
+    const tab = $("#photos-tab");
+    const visual = $("#panel-visual-ratings");
+    const tag = $("#tagline");
+    if (tab) tab.hidden = !enabled;
+    if (visual) visual.hidden = !enabled;
+    if (tag) {
+      tag.textContent = enabled
+        ? "Time-aware EMA trend · gap-tolerant · kcal from slope · Grok photo ratings"
+        : "Time-aware EMA trend · gap-tolerant · kcal from slope";
+    }
+    // If Photos was open but access went away, snap back to tracker
+    if (!enabled && window.hackDietPhotos && typeof window.hackDietPhotos.ensureTrackerIfHidden === "function") {
+      window.hackDietPhotos.ensureTrackerIfHidden();
+    } else if (!enabled && location.hash === "#photos") {
+      location.hash = "";
+      const photosView = $("#view-photos");
+      const tracker = $("#view-tracker");
+      if (photosView) photosView.hidden = true;
+      if (tracker) tracker.hidden = false;
+    }
+    if (window.hackDietPhotos && typeof window.hackDietPhotos.setPhotosUiEnabled === "function") {
+      window.hackDietPhotos.setPhotosUiEnabled(enabled);
+    }
+  }
+
   async function loadAll() {
+    let meUser = null;
     try {
       const me = await api("/api/auth/me");
+      meUser = me.user;
       const adminLink = $("#admin-link");
+      // Admin tab only for allowlisted admins (ADMIN_USER_IDS)
       if (adminLink) adminLink.hidden = !(me.user && me.user.is_admin);
-    } catch (_) {}
+      applyPhotosNav(me.user);
+    } catch (_) {
+      applyPhotosNav(null);
+    }
     const [trend, sets] = await Promise.all([
       api("/api/trend"),
       api("/api/settings"),
@@ -130,7 +166,7 @@
     settings = sets;
     series = trend.series || [];
     summary = trend.summary || {};
-    if (window.hackDietPhotos) {
+    if (window.hackDietPhotos && meUser && meUser.photos_allowed) {
       if (trend.photo_series) window.hackDietPhotos.setPhotoSeries(trend.photo_series);
       window.hackDietPhotos.setScaleContext({
         series: series,
@@ -138,6 +174,7 @@
       });
     }
     render();
+    loadIngestTokens().catch(() => {});
   }
 
   function render() {
@@ -1173,6 +1210,73 @@
     }
   });
 
+  async function loadIngestTokens() {
+    const list = $("#ingest-list");
+    if (!list) return;
+    try {
+      const data = await api("/api/ingest-tokens");
+      list.innerHTML = "";
+      const tokens = data.tokens || [];
+      if (!tokens.length) {
+        list.innerHTML = "<li>No active tokens yet.</li>";
+        return;
+      }
+      for (const t of tokens) {
+        const li = document.createElement("li");
+        const used = t.last_used_at ? ` · last used ${t.last_used_at.slice(0, 16)}` : " · never used";
+        li.innerHTML = `<code>#${t.id}</code> ${t.label || "token"}${used} `;
+        const rev = document.createElement("button");
+        rev.type = "button";
+        rev.className = "btn ghost";
+        rev.textContent = "Revoke";
+        rev.style.padding = "2px 8px";
+        rev.style.fontSize = "12px";
+        rev.addEventListener("click", async () => {
+          if (!confirm(`Revoke token #${t.id}?`)) return;
+          try {
+            await api(`/api/ingest-tokens/${t.id}`, { method: "DELETE" });
+            await loadIngestTokens();
+          } catch (e) {
+            alert(e.message);
+          }
+        });
+        li.appendChild(rev);
+        list.appendChild(li);
+      }
+    } catch (_) {
+      list.innerHTML = "<li>Could not load tokens.</li>";
+    }
+  }
+
+  $("#btn-ingest-create")?.addEventListener("click", async () => {
+    const msg = $("#ingest-msg");
+    try {
+      const data = await api("/api/ingest-tokens", {
+        method: "POST",
+        body: JSON.stringify({ label: ($("#ingest-label")?.value || "").trim() || null }),
+      });
+      if (msg) {
+        msg.hidden = false;
+        msg.className = "msg ok";
+        msg.textContent = `Token created — copy now: ${data.token}`;
+      }
+      if ($("#ingest-label")) $("#ingest-label").value = "";
+      await loadIngestTokens();
+      try {
+        await navigator.clipboard.writeText(data.token);
+        if (msg) msg.textContent += " (copied to clipboard)";
+      } catch (_) {}
+    } catch (e) {
+      if (msg) {
+        msg.hidden = false;
+        msg.className = "msg err";
+        msg.textContent = e.message;
+      } else {
+        alert(e.message);
+      }
+    }
+  });
+
   $$("#range-tabs .tab").forEach((btn) => {
     btn.addEventListener("click", () => {
       $$("#range-tabs .tab").forEach((b) => b.classList.remove("active"));
@@ -1229,6 +1333,61 @@
       $("#edit-dialog").close();
     } catch (e) {
       alert(e.message);
+    }
+  });
+
+  $("#import-zip")?.addEventListener("change", async (ev) => {
+    const input = ev.target;
+    const file = input.files && input.files[0];
+    input.value = "";
+    const msg = $("#import-msg");
+    if (!file) return;
+    const ok = confirm(
+      "Import this backup ZIP into your account?\n\n" +
+        "Matching weigh-ins and photos are updated (not duplicated).\n" +
+        "New items are added. Settings keys in the ZIP overwrite yours."
+    );
+    if (!ok) return;
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      if (msg) {
+        msg.hidden = false;
+        msg.className = "hint";
+        msg.textContent = "Importing…";
+      }
+      const res = await fetch("/api/import", { method: "POST", body: fd, credentials: "include" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || data.error || res.statusText);
+      applyState(data);
+      if (data.settings) settings = data.settings;
+      if (window.hackDietPhotos && data.photo_series) {
+        window.hackDietPhotos.setPhotoSeries(data.photo_series);
+      }
+      const im = data.import || {};
+      const parts = [
+        `settings ${im.settings_upserted || 0}`,
+        `weights +${im.weights_inserted || 0}/~${im.weights_updated || 0}`,
+        `photos +${im.photos_inserted || 0}/~${im.photos_updated || 0}`,
+      ];
+      if (msg) {
+        msg.hidden = false;
+        msg.className = "hint";
+        msg.style.color = "var(--accent-2, inherit)";
+        msg.textContent = "Import OK — " + parts.join(" · ");
+        if ((im.errors || []).length) {
+          msg.textContent += ` (${im.errors.length} warning(s))`;
+        }
+      }
+      await loadAll();
+    } catch (e) {
+      if (msg) {
+        msg.hidden = false;
+        msg.className = "hint err";
+        msg.textContent = e.message || String(e);
+      } else {
+        alert(e.message || String(e));
+      }
     }
   });
 

@@ -165,6 +165,11 @@ static bool postMeasurement(float lb, float bodyFatPct /* <0 if unknown */) {
     return false;
   }
   http.addHeader("Content-Type", "application/json");
+#ifdef INGEST_TOKEN
+  if (INGEST_TOKEN[0] != '\0') {
+    http.addHeader("Authorization", String("Bearer ") + INGEST_TOKEN);
+  }
+#endif
   int code = http.POST(body);
   String resp = http.getString();
   http.end();
@@ -299,6 +304,11 @@ static bool fetchScaleProfile() {
   HTTPClient http;
   http.setTimeout(5000);
   if (!http.begin(url)) return false;
+#ifdef INGEST_TOKEN
+  if (INGEST_TOKEN[0] != '\0') {
+    http.addHeader("Authorization", String("Bearer ") + INGEST_TOKEN);
+  }
+#endif
   int code = http.GET();
   String body = http.getString();
   http.end();

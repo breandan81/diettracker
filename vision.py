@@ -18,39 +18,79 @@ from typing import Any, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parent
 
-ANALYSIS_PROMPT = """You are a fitness progress photo analyzer for a personal diet tracker app.
+def subject_phrase(sex: Optional[str] = None, age: Optional[int] = None) -> str:
+    """Human-readable subject for prompts, e.g. 'a 44-year-old man'."""
+    sex_n = (sex or "").strip().lower()
+    if sex_n in ("m", "male", "man"):
+        noun = "man"
+    elif sex_n in ("f", "female", "woman"):
+        noun = "woman"
+    else:
+        noun = "adult"
+    if age is not None:
+        try:
+            a = int(age)
+            if 5 <= a <= 120:
+                article = "an" if noun == "adult" else "a"
+                return f"{article} {a}-year-old {noun}"
+        except (TypeError, ValueError):
+            pass
+    if noun == "adult":
+        return "an adult"
+    return f"an adult {noun}"
+
+
+def subject_possessive(sex: Optional[str] = None) -> str:
+    sex_n = (sex or "").strip().lower()
+    if sex_n in ("m", "male", "man"):
+        return "his"
+    if sex_n in ("f", "female", "woman"):
+        return "her"
+    return "their"
+
+
+def build_analysis_prompt(
+    *, sex: Optional[str] = None, age: Optional[int] = None
+) -> str:
+    subject = subject_phrase(sex, age)
+    return f"""You are a fitness progress photo analyzer for a personal diet tracker app.
 
 When given a photo of a person, analyze their physical appearance and return a structured assessment.
+The subject is {subject} — judge appearance and body composition with realistic standards for that demographic.
 
 Rules:
 - Be honest and consistent across photos so trends over time are meaningful.
 - Account for clothing, lighting, camera angle, and pose — note when these factors reduce confidence.
 - Separate overall appearance from pure body-composition assessment. Clothing, grooming, posture, and facial structure all matter.
-- Do not be overly flattering or harsh. Aim for realistic mid-40s male standards.
+- Do not be overly flattering or harsh. Aim for realistic standards for {subject}.
 - Always respond with valid JSON only. No extra text before or after the JSON.
 
 Output this exact JSON structure:
 
-{
-  "bmi_estimate": {
+{{
+  "bmi_estimate": {{
     "point": 29.5,
     "range_low": 28.0,
     "range_high": 31.0,
     "confidence": "medium"
-  },
-  "appearance_rating": {
+  }},
+  "appearance_rating": {{
     "score": 6.0,
     "scale": "1-10",
     "justification": "Short 1-2 sentence explanation of the score."
-  },
-  "observations": {
+  }},
+  "observations": {{
     "face_softness": "moderate",
     "midsection": "noticeable soft tissue under shirt",
     "overall_build": "solid / soft overweight",
     "notes": "Any relevant notes about lighting, clothing, angle, or other factors affecting the assessment."
-  },
+  }},
   "confidence_overall": "medium"
-}"""
+}}"""
+
+
+# Back-compat default (no demographics) — prefer build_analysis_prompt(...)
+ANALYSIS_PROMPT = build_analysis_prompt()
 
 
 def _load_env_file(path: Path) -> None:
@@ -166,7 +206,13 @@ def _normalize(analysis: dict) -> dict:
     }
 
 
-def analyze_image_bytes(image_bytes: bytes, mime: str = "image/jpeg") -> dict:
+def analyze_image_bytes(
+    image_bytes: bytes,
+    mime: str = "image/jpeg",
+    *,
+    sex: Optional[str] = None,
+    age: Optional[int] = None,
+) -> dict:
     """Call Grok vision and return normalized analysis + raw meta."""
     api_key, model = load_xai_credentials()
     if not api_key:
@@ -182,13 +228,14 @@ def analyze_image_bytes(image_bytes: bytes, mime: str = "image/jpeg") -> dict:
 
     b64 = base64.b64encode(image_bytes).decode("ascii")
     data_url = f"data:{mime};base64,{b64}"
+    system_prompt = build_analysis_prompt(sex=sex, age=age)
 
     # Chat Completions style (matches other local apps) with image_url content parts
     payload = {
         "model": model,
         "temperature": 0.2,
         "messages": [
-            {"role": "system", "content": ANALYSIS_PROMPT},
+            {"role": "system", "content": system_prompt},
             {
                 "role": "user",
                 "content": [
@@ -226,11 +273,17 @@ def analyze_image_bytes(image_bytes: bytes, mime: str = "image/jpeg") -> dict:
     return parsed
 
 
-def analyze_image_file(path: Path, mime: Optional[str] = None) -> dict:
+def analyze_image_file(
+    path: Path,
+    mime: Optional[str] = None,
+    *,
+    sex: Optional[str] = None,
+    age: Optional[int] = None,
+) -> dict:
     data = path.read_bytes()
     if mime is None:
         suf = path.suffix.lower()
         mime = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}.get(
             suf, "image/jpeg"
         )
-    return analyze_image_bytes(data, mime)
+    return analyze_image_bytes(data, mime, sex=sex, age=age)

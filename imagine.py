@@ -10,7 +10,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
-from vision import load_xai_credentials
+from vision import load_xai_credentials, subject_phrase, subject_possessive
 
 IMAGINE_MODEL = os.environ.get("XAI_IMAGINE_MODEL", "grok-imagine-image-2.0")
 
@@ -22,22 +22,27 @@ def build_goal_prompt(
     current_bmi: Optional[float],
     goal_bmi: Optional[float],
     appearance_notes: Optional[str] = None,
+    sex: Optional[str] = None,
+    age: Optional[int] = None,
 ) -> str:
-    cur = f"{current_lb:.1f} lb" if current_lb is not None else "his current weight"
+    poss = subject_possessive(sex)
+    subject = subject_phrase(sex, age)
+    cur = f"{current_lb:.1f} lb" if current_lb is not None else f"{poss} current weight"
     cur_bmi = f" (approx BMI {current_bmi:.1f})" if current_bmi is not None else ""
     goal_bmi_s = f" (approx BMI {goal_bmi:.1f})" if goal_bmi is not None else ""
     extra = ""
     if appearance_notes:
         extra = f" Context from a prior assessment: {appearance_notes[:240]}"
 
+    # Direction-neutral phrasing covers both loss and gain goals
     return (
         "Edit this realistic personal progress photo to show a believable projection "
-        f"of the same person at a goal body weight of {goal_lb:.1f} lb{goal_bmi_s}, "
-        f"down from {cur}{cur_bmi}. "
+        f"of the same person ({subject}) at a goal body weight of {goal_lb:.1f} lb{goal_bmi_s}, "
+        f"from {cur}{cur_bmi}. "
         "Keep the identical person identity, face structure, hair, clothing, pose, "
         "framing, background, and lighting. "
-        "Realistically reduce soft tissue in the midsection, face, and overall build "
-        "in proportion to that weight change for a mid-40s male — subtle and natural, "
+        "Realistically adjust soft tissue in the midsection, face, and overall build "
+        f"in proportion to that weight change for {subject} — subtle and natural, "
         "not extreme, not bodybuilder, not plastic surgery. "
         "Photorealistic continuity with the source photo."
         f"{extra}"
@@ -78,6 +83,8 @@ def edit_image_to_goal(
     current_bmi: Optional[float] = None,
     goal_bmi: Optional[float] = None,
     appearance_notes: Optional[str] = None,
+    sex: Optional[str] = None,
+    age: Optional[int] = None,
 ) -> dict[str, Any]:
     """Call Imagine edits API; return {bytes, mime, prompt, model, url?}."""
     api_key, _chat_model = load_xai_credentials()
@@ -94,6 +101,8 @@ def edit_image_to_goal(
         current_bmi=current_bmi,
         goal_bmi=goal_bmi,
         appearance_notes=appearance_notes,
+        sex=sex,
+        age=age,
     )
 
     payload = {

@@ -81,8 +81,13 @@
         <p class="hint">Until monetized/moderated: users need <code>photos_allowed</code> or a redeemable invite. Admins always allowed.</p>
         <label class="check" style="flex-direction:row;gap:8px;align-items:center;">
           <input type="checkbox" id="photos-feature" />
-          <span>Photos feature enabled globally</span>
+          <span>Photos feature enabled (site-wide kill switch)</span>
         </label>
+        <p class="hint" style="margin-top:6px;">
+          When <strong>unchecked</strong>, <em>nobody</em> can upload photos (including invitees).
+          When checked, only invited / <code>photos_allowed</code> users (and admins) can upload.
+          This does not make photos public.
+        </p>
         <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
           <input type="text" id="invite-label" placeholder="Invite label (optional)" style="flex:1;min-width:140px;background:var(--panel-2);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px;" />
           <button type="button" class="btn primary" id="btn-invite">Create photo invite</button>
@@ -95,19 +100,29 @@
 
   <script>
     const $ = (s) => document.querySelector(s);
+    function errText(data, fallback) {
+      const d = data && (data.detail ?? data.error);
+      if (typeof d === "string") return d;
+      if (Array.isArray(d)) {
+        return d.map((x) => (x && x.msg) || JSON.stringify(x)).join("; ");
+      }
+      if (d && typeof d === "object") return JSON.stringify(d);
+      return fallback || "request failed";
+    }
     async function api(path, opts = {}) {
       const res = await fetch(path, {
         credentials: "include",
-        headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
         ...opts,
+        headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
       });
       const data = await res.json().catch(() => ({}));
       if (res.status === 401) { location.href = "/login.html"; throw new Error("auth"); }
-      if (res.status === 403) { throw new Error(data.detail || data.error || "Admin only"); }
-      if (!res.ok) throw new Error(data.detail || data.error || res.statusText);
+      if (res.status === 403) { location.href = "/"; throw new Error(errText(data, "Admin only")); }
+      if (!res.ok) throw new Error(errText(data, res.statusText));
       return data;
     }
     function show(el, text, ok) {
+      if (!el) { if (text) alert(text); return; }
       el.hidden = !text;
       el.textContent = text || "";
       el.className = "msg " + (ok ? "ok" : "err");
@@ -132,7 +147,7 @@
         tr.innerHTML = `
           <td class="mono">${u.id}${u.is_admin ? " ★" : ""}</td>
           <td>${u.email}${u.name ? `<div class="hint">${u.name}</div>` : ""}
-            <div class="hint">${u.is_active ? "active" : "DISABLED"} · ${u.has_password ? "pw" : ""}${u.has_google ? " google" : ""} · photos ${u.photos_allowed ? "ON" : "off"}</div>
+            <div class="hint">${u.is_active ? "active" : "DISABLED"} · ${u.email_verified ? "verified" : "UNVERIFIED"} · ${u.has_password ? "pw" : ""}${u.has_google ? " google" : ""} · photos ${u.photos_allowed ? "ON" : "off"}</div>
           </td>
           <td class="mono">${u.weights} wt · ${u.photos} ph</td>
           <td class="mono">${usageStr(u.usage_today)}</td>
@@ -191,7 +206,72 @@
         });
         actions.appendChild(toggle);
         actions.appendChild(photosBtn);
+        if (!u.email_verified) {
+          const verifyBtn = document.createElement("button");
+          verifyBtn.type = "button";
+          verifyBtn.className = "btn ghost";
+          verifyBtn.textContent = "Verify email";
+          verifyBtn.style.marginLeft = "6px";
+          verifyBtn.addEventListener("click", async () => {
+            try {
+              await api(`/api/admin/users/${u.id}/email-verified`, {
+                method: "POST",
+                body: JSON.stringify({ email_verified: true }),
+              });
+              show($("#users-msg"), "Marked verified: " + u.email, true);
+              await load();
+            } catch (e) {
+              show($("#users-msg"), e.message, false);
+            }
+          });
+          actions.appendChild(verifyBtn);
+        }
         actions.appendChild(reset);
+
+        const delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.className = "btn ghost";
+        delBtn.textContent = "Delete";
+        delBtn.style.marginLeft = "6px";
+        delBtn.style.color = "var(--danger, #e35)";
+        delBtn.disabled = u.is_admin;
+        delBtn.title = u.is_admin
+          ? "Cannot delete admin allowlist users"
+          : "Permanently delete this account and all their data";
+        delBtn.addEventListener("click", async () => {
+          if (u.is_admin || delBtn.disabled) return;
+          const ok1 = confirm(
+            `Permanently delete ${u.email}?\n\n` +
+              `This removes their weigh-ins, photos, settings, and tokens.\n` +
+              `This cannot be undone.`
+          );
+          if (!ok1) return;
+          const typed = prompt(
+            `To confirm, type the account email exactly:\n${u.email}`
+          );
+          if (typed == null) return;
+          const typedNorm = typed.trim().toLowerCase();
+          const expectNorm = String(u.email).trim().toLowerCase();
+          if (typedNorm !== expectNorm) {
+            show($("#users-msg"), "Delete cancelled — email did not match.", false);
+            return;
+          }
+          delBtn.disabled = true;
+          try {
+            await api(`/api/admin/users/${u.id}/delete`, {
+              method: "POST",
+              body: JSON.stringify({ confirm_email: typed.trim() }),
+            });
+            show($("#users-msg"), "Deleted " + u.email, true);
+            await load();
+          } catch (e) {
+            delBtn.disabled = false;
+            show($("#users-msg"), e.message || String(e), false);
+            alert("Delete failed: " + (e.message || String(e)));
+          }
+        });
+        actions.appendChild(delBtn);
+
         tb.appendChild(tr);
       }
       $("#photos-feature").checked = !!data.photos_feature_enabled;

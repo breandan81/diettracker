@@ -379,6 +379,11 @@ main {
   flex-direction: column;
   min-width: 0;
 }
+/* Mobile Safari sometimes still paints a broken-image glyph if only [hidden] is set */
+.pd-images figure[hidden],
+#pd-proj-wrap[hidden] {
+  display: none !important;
+}
 .pd-images figure + figure {
   border-top: 1px solid var(--line);
 }

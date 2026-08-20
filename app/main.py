@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import io
+import zipfile
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -28,6 +32,36 @@ app.include_router(auth_router.router)
 app.include_router(data_router.router)
 app.include_router(admin_router.router)
 
+# Files to omit from the public ESP firmware zip (secrets / build junk)
+_ESP_ZIP_SKIP = {
+    "config.h",
+    "test_scale_session",
+}
+_ESP_ZIP_SKIP_SUFFIXES = {".o", ".elf", ".bin", ".pyc"}
+
+
+def _build_esp_firmware_zip() -> bytes:
+    root = Path(__file__).resolve().parents[1]
+    sketch = root / "esp32" / "renpho_to_diettracker"
+    readme = root / "esp32" / "README.md"
+    if not sketch.is_dir():
+        raise FileNotFoundError("esp32/renpho_to_diettracker missing")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        if readme.is_file():
+            zf.write(readme, arcname="esp32/README.md")
+        for path in sorted(sketch.rglob("*")):
+            if not path.is_file():
+                continue
+            if path.name in _ESP_ZIP_SKIP or path.suffix in _ESP_ZIP_SKIP_SUFFIXES:
+                continue
+            if path.name.endswith("~") or path.name.startswith("."):
+                continue
+            rel = path.relative_to(sketch.parent)  # renpho_to_diettracker/...
+            zf.write(path, arcname=f"esp32/{rel.as_posix()}")
+    return buf.getvalue()
+
 
 @app.on_event("startup")
 def _startup() -> None:
@@ -48,7 +82,29 @@ def health() -> JSONResponse:
             "auth": "session",
             "google_oauth": bool(settings.google_client_id and settings.google_client_secret),
             "xai_configured": bool(settings.xai_api_key),
+            "smtp_configured": bool(
+                (settings.smtp_host or "").strip()
+                and (settings.smtp_from or "").strip()
+                and (settings.public_base_url or "").strip()
+            ),
+            "public_base_url": (settings.public_base_url or "").rstrip("/") or None,
         }
+    )
+
+
+@app.get("/api/esp/firmware.zip")
+def esp_firmware_zip():
+    """Download Renpho BLE → τrend ESP32 sketch (no secrets)."""
+    try:
+        data = _build_esp_firmware_zip()
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": 'attachment; filename="trend-esp32-renpho.zip"',
+        },
     )
 
 
@@ -77,10 +133,22 @@ if settings.public_dir.is_dir():
     def login_page():
         return FileResponse(settings.public_dir / "login.html")
 
+    @app.get("/about")
+    @app.get("/about.html")
+    def about_page():
+        return FileResponse(settings.public_dir / "about.html")
+
     @app.get("/admin")
     @app.get("/admin.html")
     def admin_page(request: Request):
-        if not request.session.get("user_id"):
+        uid = request.session.get("user_id")
+        if not uid:
+            return RedirectResponse("/login.html")
+        # HTML shell is admin-only — APIs already enforce require_admin
+        try:
+            if int(uid) not in settings.admin_ids:
+                return RedirectResponse("/")
+        except (TypeError, ValueError):
             return RedirectResponse("/login.html")
         return FileResponse(settings.public_dir / "admin.html")
 

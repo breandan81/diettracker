@@ -1,0 +1,34 @@
+# Copy to /etc/caddy/Caddyfile and replace YOUR_DOMAIN.
+#   DOMAIN=trend.example.com bash deploy/remote-bootstrap.sh
+#   # or manually:
+#   sudo cp deploy/Caddyfile.example /etc/caddy/Caddyfile
+#   sudo sed -i 's/YOUR_DOMAIN/trend.example.com/' /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+#
+# Closed-beta gate: HTTP basic auth on the WHOLE site (browser prompt before
+# τrend login). Generate a hash:
+#   ./deploy/caddy-hash-password.sh 'your-shared-password'
+# Then paste into the basic_auth block below and reload Caddy.
+# To open the site later: delete the basic_auth { ... } block and reload.
+
+YOUR_DOMAIN {
+	encode gzip
+
+	# Optional closed-beta gate (omit for public). Generate hash with:
+	#   ./deploy/caddy-hash-password.sh 'shared-password'
+	# basic_auth {
+	# 	beta __BETA_PASSWORD_HASH__
+	# }
+
+	reverse_proxy 127.0.0.1:8511
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/trend-multi.log
+	}
+}

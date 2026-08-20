@@ -10,6 +10,7 @@
   let weightSeries = []; // [{date, weight|trend}]
   let heightIn = null;
   let photosAllowed = false;
+  let photosUiEnabled = false;
 
   function fmt(n, d = 1) {
     if (n == null || Number.isNaN(n)) return "—";
@@ -49,19 +50,39 @@
     applyPhotosAccessUI();
   }
 
+  function ensureTrackerIfHidden() {
+    const photosView = $("#view-photos");
+    if (photosView && !photosView.hidden) setView("tracker");
+    else if (location.hash === "#photos") {
+      try {
+        history.replaceState(null, "", "#tracker");
+      } catch (_) {}
+    }
+  }
+
   function setView(name) {
     const tracker = $("#view-tracker");
     const photosView = $("#view-photos");
     if (!tracker || !photosView) return;
+    if (name === "photos" && !photosUiEnabled) {
+      name = "tracker";
+    }
     const isPhotos = name === "photos";
     tracker.hidden = isPhotos;
     photosView.hidden = !isPhotos;
     $$("#view-tabs .view-tab").forEach((b) => {
-      b.classList.toggle("active", b.dataset.view === name);
+      if (b.dataset.view) b.classList.toggle("active", b.dataset.view === name);
     });
     if (isPhotos) {
-      refreshPhotosAccess().then(() => renderGallery());
-    } else renderVisualChart();
+      // Always reload from server — otherwise a fresh session/device shows an empty gallery
+      // after we stopped calling loadPhotos() on init.
+      refreshPhotosAccess()
+        .then(() => loadPhotos())
+        .then(() => renderGallery())
+        .catch((e) => console.warn("photos load failed", e));
+    } else if (photosUiEnabled) {
+      renderVisualChart();
+    }
     try {
       history.replaceState(null, "", isPhotos ? "#photos" : "#tracker");
     } catch (_) {}
@@ -105,13 +126,19 @@
     setScaleContext({ series, height_in }) {
       if (series) weightSeries = series;
       if (height_in !== undefined) heightIn = height_in;
-      renderVisualChart();
+      if (photosUiEnabled) renderVisualChart();
     },
     setPhotoSeries(series) {
       photoSeries = series || [];
-      renderVisualChart();
+      if (photosUiEnabled) renderVisualChart();
     },
+    setPhotosUiEnabled(on) {
+      photosUiEnabled = !!on;
+      if (!photosUiEnabled) ensureTrackerIfHidden();
+    },
+    ensureTrackerIfHidden,
     async refresh() {
+      if (!photosUiEnabled) return;
       await loadPhotos();
     },
   };
@@ -264,6 +291,7 @@
 
   function showProjection(p) {
     const wrap = $("#pd-proj-wrap");
+    const img = $("#pd-proj-img");
     const imgs = document.querySelector(".pd-images");
     const msg = $("#pd-proj-msg");
     const goalScores = $("#pd-goal-scores");
@@ -272,15 +300,39 @@
     if (goalScores) goalScores.hidden = true;
     compare?.classList.remove("has-goal");
 
+    const hideProj = () => {
+      // Clear src so mobile doesn't show a broken-image icon for an empty/404 projection
+      if (img) {
+        img.removeAttribute("src");
+        img.alt = "";
+      }
+      if (wrap) {
+        wrap.hidden = true;
+        wrap.style.display = "none";
+      }
+      imgs?.classList.remove("has-projection");
+      if (msg) msg.hidden = true;
+    };
+
     if (p?.has_projection && p.projection_url) {
-      $("#pd-proj-img").src = p.projection_url + "?t=" + Date.now();
+      if (img) {
+        img.alt = "goal weight projection";
+        img.onerror = () => {
+          // File missing / 404 — hide entirely rather than a broken icon
+          hideProj();
+        };
+        img.src = p.projection_url + "?t=" + Date.now();
+      }
       const g = p.projection_goal_lb != null ? fmt(p.projection_goal_lb, 0) : "?";
       const cap = $("#pd-proj-caption");
       if (cap) {
         cap.innerHTML =
           `At goal (~${g} lb) <span class="pd-zoom-hint">click to zoom</span>`;
       }
-      wrap.hidden = false;
+      if (wrap) {
+        wrap.hidden = false;
+        wrap.style.display = "";
+      }
       imgs?.classList.add("has-projection");
 
       if (msg) {
@@ -292,9 +344,7 @@
         msg.hidden = false;
       }
     } else {
-      wrap.hidden = true;
-      imgs?.classList.remove("has-projection");
-      if (msg) msg.hidden = true;
+      hideProj();
     }
   }
 
@@ -336,11 +386,17 @@
   }
 
   // events
-  $$("#view-tabs .view-tab").forEach((btn) => {
-    btn.addEventListener("click", () => setView(btn.dataset.view));
+  $$("#view-tabs .view-tab[data-view]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (btn.dataset.view === "photos" && !photosUiEnabled) return;
+      setView(btn.dataset.view);
+    });
   });
   document.querySelectorAll(".jump-photos").forEach((b) => {
-    b.addEventListener("click", () => setView("photos"));
+    b.addEventListener("click", () => {
+      if (!photosUiEnabled) return;
+      setView("photos");
+    });
   });
 
   $("#gallery")?.addEventListener("click", (ev) => {
@@ -546,10 +602,17 @@
       photos = data.photos || [];
       photoSeries = data.photo_series || [];
       setXaiPill(data.xai);
-      msg.textContent = data.photo?.appearance_score != null
-        ? `Saved · appearance ${fmt(data.photo.appearance_score, 1)}/10 · visual BMI ${fmt(data.photo.bmi_point, 1)}`
-        : "Saved photo";
-      msg.className = "hint ok";
+      if (data.photo?.appearance_score != null) {
+        msg.textContent =
+          `Saved · appearance ${fmt(data.photo.appearance_score, 1)}/10 · visual BMI ${fmt(data.photo.bmi_point, 1)}`;
+        msg.className = "hint ok";
+      } else if (data.note && /fail|skip/i.test(data.note)) {
+        msg.textContent = data.note;
+        msg.className = "hint err";
+      } else {
+        msg.textContent = data.note || "Saved photo";
+        msg.className = "hint ok";
+      }
       msg.hidden = false;
       $("#p-note").value = "";
       $("#p-file").value = "";
@@ -575,6 +638,9 @@
   })();
   if ($("#p-date")) $("#p-date").value = today;
 
-  if (location.hash === "#photos") setView("photos");
-  loadPhotos();
+  // Photos UI stays dormant until app.js enables it for allowed accounts.
+  if (location.hash === "#photos") {
+    // Will no-op to tracker until setPhotosUiEnabled(true)
+    setView("photos");
+  }
 })();

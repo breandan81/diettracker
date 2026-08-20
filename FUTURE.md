@@ -1,5 +1,9 @@
 # Future improvements
 
+## Public multi-user / photo safety
+
+Before any open internet deploy with photo upload → Grok: see **Safety note** and **Staged deployment plan** in [`MULTIUSER.md`](./MULTIUSER.md). Short version: closed beta → public signup with invite-only private photos → moderation before Grok vision → open uploads only if monetized. Do not ship an unmoderated upload pipe on your xAI key. Stopping at “public accounts, photos still invite-only” is a fine long-term shape.
+
 ## Renpho BLE auto-ingest (ES-CS20M / Elis 1)
 
 **Status:** Working on ESP32-C3 — one POST per scale power-on (claim-before-HTTP + cooldown), body fat via `/api/scale-profile`. See [`esp32/`](./esp32/).  
@@ -27,7 +31,8 @@
 ### Still nice-to-have
 
 - Lock `SCALE_MAC` after first discovery (multi-scale households)
-- Optional API ingest token; store impedance / water % later
+- ~~Optional API ingest token~~ (multi-user: Settings → ingest tokens + Bearer on ESP)
+- Store impedance / water % later
 - Keep manual log form as fallback (already present)
 
 ### Out of scope for now

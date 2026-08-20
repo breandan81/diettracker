@@ -64,3 +64,11 @@ def init_db() -> None:
                         "DEFAULT 0 NOT NULL"
                     )
                 )
+            if "email_verified" not in cols:
+                # Grandfather existing rows so local/admin accounts keep working
+                conn.execute(
+                    text(
+                        "ALTER TABLE users ADD COLUMN email_verified BOOLEAN "
+                        "DEFAULT 1 NOT NULL"
+                    )
+                )

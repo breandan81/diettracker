@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>τrend — about</title>
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="stylesheet" href="/style.css?v=31" />
+  <style>
+    .about-wrap { max-width: 720px; margin: 28px auto 64px; padding: 0 20px; }
+    .about-wrap h1 { font-size: 22px; margin: 0 0 8px; }
+    .about-wrap h2 { font-size: 16px; margin: 28px 0 10px; }
+    .about-wrap p, .about-wrap li { color: var(--muted); line-height: 1.55; }
+    .about-wrap code { font-size: 0.92em; }
+    .about-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0 8px; }
+  </style>
+</head>
+<body>
+  <div class="about-wrap">
+    <p><a class="btn ghost" href="/">← τrend</a></p>
+    <h1>About τrend</h1>
+    <p>
+      τrend is a weight trend tracker in the spirit of the Hacker’s Diet:
+      time-aware EMA smoothing, gap-tolerant logging, kcal estimates from slope,
+      and optional Grok coaching.
+    </p>
+
+    <h2>Renpho BLE auto-log (ESP32)</h2>
+    <p>
+      An ESP32 near your scale can hear a Renpho ES-CS20M / Elis 1 weigh-in over BLE
+      and <code>POST</code> the weight to your account — no phone app tap.
+    </p>
+    <ol>
+      <li>In τrend → Settings, create an <strong>ingest token</strong> and copy it once.</li>
+      <li>Download the firmware zip below; copy <code>config.example.h</code> → <code>config.h</code>.</li>
+      <li>Set WiFi, tracker host/port, and <code>INGEST_TOKEN</code>.</li>
+      <li>Flash with Arduino IDE / <code>arduino-cli</code> (see README inside the zip).</li>
+      <li>Fill height / sex / age in Settings so the ESP can push a scale body-fat profile.</li>
+    </ol>
+    <div class="about-actions">
+      <a class="btn primary" href="/api/esp/firmware.zip">Download ESP32 sketch (.zip)</a>
+      <a class="btn ghost" href="/">Open tracker</a>
+    </div>
+    <p>
+      Multi-user auth: the ESP sends
+      <code>Authorization: Bearer &lt;ingest-token&gt;</code>
+      on <code>POST /api/weights</code> and <code>GET /api/scale-profile</code>.
+      Tokens are hashed at rest; revoke anytime from Settings.
+    </p>
+
+    <h2>Not medical advice</h2>
+    <p>
+      Trend math and AI coach text are informational tools, not diagnosis or treatment.
+      Illegal content is prohibited; abuse may result in a ban and reporting where required.
+    </p>
+  </div>
+</body>
+</html>

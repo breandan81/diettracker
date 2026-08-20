@@ -68,6 +68,76 @@ def set_user_setting(db: Session, user_id: int, key: str, value: str) -> None:
         db.add(UserSetting(user_id=user_id, key=key, value=value))
 
 
+def scale_profile_payload(db: Session, user_id: int) -> dict:
+    """Compact profile for ESP32 BLE → Renpho (QN Sex: Male=0, Female=1)."""
+    s = get_user_settings(db, user_id)
+    height_in = s.get("height_in")
+    height_m = (float(height_in) * 0.0254) if height_in else None
+    sex = s.get("sex")
+    sex_code = {"male": 0, "female": 1}.get(sex) if sex else None
+    age = s.get("age")
+    ready = bool(
+        height_m
+        and height_m > 0
+        and sex_code is not None
+        and age is not None
+        and 5 <= int(age) <= 120
+    )
+    return {
+        "ready": ready,
+        "sex": sex,
+        "sex_code": sex_code,
+        "age": age,
+        "height_in": height_in,
+        "height_m": round(height_m, 4) if height_m else None,
+        "athlete": bool(s.get("athlete")),
+        "algorithm": 4,
+        "unit": s.get("unit") or "lb",
+    }
+
+
+def bmi_from_lb_in(weight_lb: float, height_in: float) -> dict:
+    """US customary BMI + WHO-ish adult category + healthy weight band."""
+    if height_in <= 0 or weight_lb <= 0:
+        raise ValueError("height and weight must be positive")
+    bmi = (weight_lb / (height_in * height_in)) * 703.0
+    if bmi < 18.5:
+        category, cat_key = "Underweight", "underweight"
+    elif bmi < 25.0:
+        category, cat_key = "Normal", "normal"
+    elif bmi < 30.0:
+        category, cat_key = "Overweight", "overweight"
+    elif bmi < 35.0:
+        category, cat_key = "Obese I", "obese"
+    elif bmi < 40.0:
+        category, cat_key = "Obese II", "obese"
+    else:
+        category, cat_key = "Obese III", "obese"
+    healthy_low = 18.5 * (height_in * height_in) / 703.0
+    healthy_high = 24.9 * (height_in * height_in) / 703.0
+    ft = int(height_in // 12)
+    inch = height_in - ft * 12
+    return {
+        "bmi": round(bmi, 1),
+        "category": category,
+        "category_key": cat_key,
+        "height_in": height_in,
+        "height_label": (
+            f"{ft}'{inch:.0f}\"" if abs(inch - round(inch)) < 0.05 else f"{ft}'{inch:.1f}\""
+        ),
+        "healthy_weight_lb": {
+            "low": round(healthy_low, 1),
+            "high": round(healthy_high, 1),
+        },
+        "ranges": [
+            {"key": "underweight", "label": "Underweight", "max": 18.5},
+            {"key": "normal", "label": "Normal", "min": 18.5, "max": 25.0},
+            {"key": "overweight", "label": "Overweight", "min": 25.0, "max": 30.0},
+            {"key": "obese", "label": "Obese", "min": 30.0},
+        ],
+    }
+
+
 def load_user_trend(db: Session, user_id: int, half_life: float | None = None):
     settings = get_user_settings(db, user_id)
     if half_life is None:
@@ -82,14 +152,12 @@ def load_user_trend(db: Session, user_id: int, half_life: float | None = None):
     points = compute_trend(samples, half_life_days=half_life)
     series = [p.to_dict() for p in points]
     summ = trend_summary(points)
-    # BMI attach
+    # BMI attach (full category payload for the UI tile)
     height_in = settings.get("height_in")
     weight = summ.get("trend") or summ.get("latest_weight")
     if height_in and weight:
         try:
-            hi = float(height_in)
-            bmi = (float(weight) / (hi * hi)) * 703.0
-            summ["bmi"] = {"bmi": round(bmi, 1), "height_in": hi}
+            summ["bmi"] = bmi_from_lb_in(float(weight), float(height_in))
         except Exception:
             summ["bmi"] = None
     else:

@@ -35,9 +35,12 @@ See community notes in [`../FUTURE.md`](../FUTURE.md) and [renpho-escs20m](https
 WiFi + HTTPClient ship with the ESP32 Arduino core.
 
 1. Copy `config.example.h` → `config.h` and edit WiFi + tracker URL.
-2. Optionally set `SCALE_MAC` after a first scan (Serial prints advertisements).
-3. Set `BLE_MODE` to `MODE_AUTO`, `MODE_GATT`, or `MODE_BROADCAST`.
-4. Flash `renpho_to_diettracker.ino` (ESP32-C3 SuperMini example):
+2. For **multi-user** τrend: create an ingest token in the web UI (Settings) and set
+   `INGEST_TOKEN` in `config.h`. The sketch sends `Authorization: Bearer …` on
+   `POST /api/weights` and `GET /api/scale-profile`.
+3. Optionally set `SCALE_MAC` after a first scan (Serial prints advertisements).
+4. Set `BLE_MODE` to `MODE_AUTO`, `MODE_GATT`, or `MODE_BROADCAST`.
+5. Flash `renpho_to_diettracker.ino` (ESP32-C3 SuperMini example):
 
 ```bash
 FQBN=esp32:esp32:esp32c3:CDCOnBoot=cdc,UploadSpeed=115200,PartitionScheme=huge_app
@@ -45,15 +48,18 @@ arduino-cli compile --fqbn "$FQBN" renpho_to_diettracker
 arduino-cli upload -p /dev/ttyACM0 --fqbn "$FQBN" renpho_to_diettracker
 ```
 
-5. Open Serial Monitor @ **115200** with **DTR/RTS off** (otherwise the C3 keeps resetting / WiFi comes up before BLE looks wrong):
+6. Open Serial Monitor @ **115200** with **DTR/RTS off** (otherwise the C3 keeps resetting / WiFi comes up before BLE looks wrong):
 
 ```bash
 arduino-cli monitor -p /dev/ttyACM0 -c baudrate=115200,dtr=off,rts=off
 ```
 
-6. Step on the scale. Expect one POST per power-on. After success you should see
+7. Step on the scale. Expect one POST per power-on. After success you should see
    `session closed` then ~90s later `[ble] armed — step on scale for next log`.
    Only then will a second weigh-in connect.
+
+Or download a ready zip from the running app: **About → Download ESP32 sketch**
+(`/api/esp/firmware.zip`).
 
 ## One-shot session state machine
 

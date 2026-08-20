@@ -30,6 +30,7 @@
     .auth-msg.err { color: var(--danger); }
     .auth-msg.ok { color: var(--accent-2); }
     .auth-divider { text-align: center; color: var(--muted); font-size: 12px; margin: 16px 0 12px; }
+    .auth-note { font-size: 12px; color: var(--muted); margin-top: 10px; line-height: 1.45; }
   </style>
 </head>
 <body>
@@ -39,15 +40,21 @@
     </div>
     <div class="auth-card">
       <h1>Sign in</h1>
-      <p class="sub">Multi-user τrend (dev on :8511). Your personal LAN app remains on :8510.</p>
+      <p class="sub">New accounts get a verification email before you can sign in.</p>
       <form id="login-form">
-        <label>Email <input type="email" id="email" required autocomplete="username" value="breandan@example.com" /></label>
-        <label>Password <input type="password" id="password" required autocomplete="current-password" /></label>
+        <label>Email <input type="email" id="email" required autocomplete="username" /></label>
+        <label>Password <input type="password" id="password" required autocomplete="current-password" minlength="8" /></label>
+        <label id="name-wrap" hidden>Name (optional) <input type="text" id="name" autocomplete="name" /></label>
         <div class="auth-actions">
           <button type="submit" class="btn primary">Sign in</button>
           <button type="button" class="btn ghost" id="btn-register">Create account</button>
+          <button type="button" class="btn ghost" id="btn-resend">Resend verification</button>
         </div>
       </form>
+      <p class="auth-note" id="smtp-note" hidden>
+        Email signup is unavailable until the admin configures SMTP
+        (<code>SMTP_HOST</code>, <code>SMTP_FROM</code>, <code>PUBLIC_BASE_URL</code>).
+      </p>
       <div class="auth-divider">or</div>
       <a class="btn" href="/api/auth/google/start" id="google-link">Continue with Google</a>
       <p class="auth-msg" id="msg" hidden></p>
@@ -72,6 +79,10 @@
       if (!res.ok) throw new Error(data.detail || data.error || res.statusText);
       return data;
     }
+    const params = new URLSearchParams(location.search);
+    if (params.get("verified") === "1") {
+      show("Email verified — you can sign in now.", true);
+    }
     $("#login-form").addEventListener("submit", async (ev) => {
       ev.preventDefault();
       try {
@@ -85,24 +96,39 @@
       }
     });
     $("#btn-register").addEventListener("click", async () => {
+      $("#name-wrap").hidden = false;
       try {
-        await post("/api/auth/register", {
+        const data = await post("/api/auth/register", {
           email: $("#email").value,
           password: $("#password").value,
-          name: "Breandan",
+          name: ($("#name").value || "").trim() || null,
         });
-        location.href = "/";
+        show(data.message || "Check your email to verify before signing in.", true);
       } catch (e) {
         show(e.message, false);
       }
     });
-    // Hide Google if not configured
+    $("#btn-resend").addEventListener("click", async () => {
+      try {
+        const data = await post("/api/auth/resend-verification", {
+          email: $("#email").value,
+        });
+        show(data.message || "If that account needs verification, a new email was sent.", true);
+      } catch (e) {
+        show(e.message, false);
+      }
+    });
     fetch("/api/health").then(r => r.json()).then(h => {
       if (!h.google_oauth) {
         $("#google-link").style.display = "none";
         document.querySelector(".auth-divider").style.display = "none";
       }
-    });
+      if (!h.smtp_configured) {
+        $("#smtp-note").hidden = false;
+        $("#btn-register").disabled = true;
+        $("#btn-resend").disabled = true;
+      }
+    }).catch(() => {});
   </script>
 </body>
 </html>

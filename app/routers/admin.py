@@ -58,6 +58,7 @@ def list_users(admin: User = Depends(require_admin), db: Session = Depends(get_d
                 "name": u.name,
                 "is_active": u.is_active,
                 "is_admin": u.id in settings.admin_ids,
+                "email_verified": bool(getattr(u, "email_verified", False)),
                 "has_password": bool(u.password_hash),
                 "has_google": bool(u.google_sub),
                 "photos_allowed": bool(getattr(u, "photos_allowed", False))
@@ -108,6 +109,86 @@ def reset_usage(
         raise HTTPException(status_code=404, detail="User not found")
     usage = reset_usage_for_user(db, user_id)
     return {"ok": True, "id": user_id, "usage_today": usage}
+
+
+class VerifiedBody(BaseModel):
+    email_verified: bool = True
+
+
+@router.post("/users/{user_id}/email-verified")
+def set_email_verified(
+    user_id: int,
+    body: VerifiedBody,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Manually mark an account verified (support / closed-beta)."""
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.email_verified = bool(body.email_verified)
+    db.commit()
+    return {"ok": True, "id": user.id, "email_verified": user.email_verified}
+
+
+class DeleteUserBody(BaseModel):
+    confirm_email: str = Field(..., min_length=3, max_length=320)
+
+
+@router.post("/users/{user_id}/delete")
+def delete_user(
+    user_id: int,
+    body: DeleteUserBody,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Permanently delete a user and cascaded data (weights, photos rows, tokens, etc.).
+
+    Uses POST (not DELETE) so confirmation JSON is not dropped by proxies.
+    """
+    import shutil
+
+    from sqlalchemy import delete
+    from app.models import (
+        AiUsageDaily,
+        EmailVerifyToken,
+        IngestToken,
+        Photo,
+        UserSetting,
+        Weight,
+    )
+
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.id == admin.id:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+    if user.id in settings.admin_ids:
+        raise HTTPException(status_code=400, detail="Cannot delete an admin allowlist user")
+
+    expected = (user.email or "").strip().lower()
+    got = (body.confirm_email or "").strip().lower()
+    if got != expected:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Email confirmation did not match (expected {user.email})",
+        )
+
+    email = user.email
+    uid = user.id
+    photo_dir = settings.data_dir / "photos" / str(uid)
+
+    # Explicit child deletes — SQLite + SQLAlchemy otherwise tries to NULL FKs and fails
+    # NOT NULL on email_verify_tokens.user_id (IntegrityError → account never removed).
+    for model in (EmailVerifyToken, IngestToken, AiUsageDaily, Photo, Weight, UserSetting):
+        db.execute(delete(model).where(model.user_id == uid))
+    db.delete(user)
+    db.commit()
+
+    if photo_dir.is_dir():
+        shutil.rmtree(photo_dir, ignore_errors=True)
+
+    return {"ok": True, "deleted_id": uid, "deleted_email": email}
 
 
 @router.get("/quotas")

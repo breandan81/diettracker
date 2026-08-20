@@ -30,16 +30,45 @@ class User(Base):
     google_sub: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
     name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    # Email/password signup must verify before login (Google OAuth counts as verified)
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     # Photo upload/analyze/Imagine — invite-only until monetized / moderation exists
     photos_allowed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
 
-    settings: Mapped[list["UserSetting"]] = relationship(back_populates="user")
-    weights: Mapped[list["Weight"]] = relationship(back_populates="user")
-    photos: Mapped[list["Photo"]] = relationship(back_populates="user")
-    ingest_tokens: Mapped[list["IngestToken"]] = relationship(back_populates="user")
+    # passive_deletes: rely on FK ON DELETE CASCADE so ORM does not NULL child FKs
+    settings: Mapped[list["UserSetting"]] = relationship(
+        back_populates="user", passive_deletes=True
+    )
+    weights: Mapped[list["Weight"]] = relationship(
+        back_populates="user", passive_deletes=True
+    )
+    photos: Mapped[list["Photo"]] = relationship(
+        back_populates="user", passive_deletes=True
+    )
+    ingest_tokens: Mapped[list["IngestToken"]] = relationship(
+        back_populates="user", passive_deletes=True
+    )
+    email_tokens: Mapped[list["EmailVerifyToken"]] = relationship(
+        back_populates="user", passive_deletes=True
+    )
+
+
+class EmailVerifyToken(Base):
+    __tablename__ = "email_verify_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped[User] = relationship(back_populates="email_tokens")
 
 
 class UserSetting(Base):

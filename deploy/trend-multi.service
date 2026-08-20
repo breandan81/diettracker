@@ -1,0 +1,21 @@
+[Unit]
+Description=τrend multi-user (FastAPI / uvicorn)
+After=network.target
+
+[Service]
+Type=simple
+User=breandan
+Group=breandan
+WorkingDirectory=/home/breandan/trend-multi
+EnvironmentFile=-/home/breandan/trend-multi/secrets.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/breandan/trend-multi/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8511
+Restart=on-failure
+RestartSec=3
+
+# Hardening (adjust if you store data elsewhere)
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

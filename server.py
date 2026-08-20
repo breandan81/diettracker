@@ -708,6 +708,16 @@ class Handler(SimpleHTTPRequestHandler):
             return self._err(404, "projection missing on disk")
         return self._serve_binary_image(path, mime)
 
+    def _profile_sex_age(self, settings: Optional[dict] = None) -> tuple:
+        s = settings if settings is not None else all_settings()
+        sex = s.get("sex") or None
+        age = s.get("age")
+        try:
+            age_i = int(float(age)) if age not in (None, "") else None
+        except (TypeError, ValueError):
+            age_i = None
+        return sex, age_i
+
     def _project_goal(self, pid: int, data: dict) -> None:
         settings = all_settings()
         goal = data.get("goal_weight", settings.get("goal_weight"))
@@ -731,6 +741,7 @@ class Handler(SimpleHTTPRequestHandler):
                 )
             except Exception:
                 goal_bmi = None
+        sex, age_i = self._profile_sex_age(settings)
 
         try:
             photo = save_goal_projection(
@@ -742,6 +753,8 @@ class Handler(SimpleHTTPRequestHandler):
                 current_bmi=float(current_bmi) if current_bmi is not None else None,
                 goal_bmi=goal_bmi,
                 now_iso=utc_now_iso(),
+                sex=sex,
+                age=age_i,
             )
         except KeyError:
             return self._err(404, "not found")
@@ -806,6 +819,7 @@ class Handler(SimpleHTTPRequestHandler):
         if len(image_bytes) > 18 * 1024 * 1024:
             return self._err(400, "image too large (max ~18MB)")
 
+        sex, age_i = self._profile_sex_age()
         try:
             photo = create_photo(
                 DB,
@@ -816,6 +830,8 @@ class Handler(SimpleHTTPRequestHandler):
                 note=note,
                 now_iso=utc_now_iso(),
                 analyze=bool(analyze),
+                sex=sex,
+                age=age_i,
             )
         except Exception as e:
             traceback.print_exc()
@@ -832,8 +848,11 @@ class Handler(SimpleHTTPRequestHandler):
         )
 
     def _reanalyze_photo(self, pid: int) -> None:
+        sex, age_i = self._profile_sex_age()
         try:
-            photo = reanalyze_photo(DB, DATA_DIR, pid, utc_now_iso())
+            photo = reanalyze_photo(
+                DB, DATA_DIR, pid, utc_now_iso(), sex=sex, age=age_i
+            )
         except KeyError:
             return self._err(404, "not found")
         except FileNotFoundError:

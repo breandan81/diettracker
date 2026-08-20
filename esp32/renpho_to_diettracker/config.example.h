@@ -8,11 +8,17 @@
 #define WIFI_PASS     "your-password"
 
 // Prefer a LAN IP; mDNS (tomservo.local) is unreliable on some ESP32 builds.
+// Multi-user τrend often runs on 8511; single-user personal app on 8510.
 #define TRACKER_HOST  "192.168.1.50"
-#define TRACKER_PORT  8510
+#define TRACKER_PORT  8511
 
 // Optional path prefix if you reverse-proxy later
 #define TRACKER_PATH  "/api/weights"
+
+// Required for multi-user τrend: create under Settings → ESP32 ingest tokens.
+// Sent as: Authorization: Bearer <token>
+// Leave empty only for the legacy single-user server (no auth).
+#define INGEST_TOKEN  ""
 
 // Note stored on each auto log
 #define WEIGHT_NOTE   "renpho-ble"

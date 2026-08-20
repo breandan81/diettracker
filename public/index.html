@@ -14,7 +14,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-  <link rel="stylesheet" href="/style.css?v=31" />
+  <link rel="stylesheet" href="/style.css?v=32" />
 </head>
 <body class="mood-idle" id="body-mood">
   <div id="fx-layer" aria-hidden="true"></div>
@@ -30,11 +30,12 @@
     </div>
     <nav class="view-tabs" id="view-tabs">
       <button type="button" class="view-tab active" data-view="tracker">Tracker</button>
-      <button type="button" class="view-tab" data-view="photos">Photos</button>
+      <button type="button" class="view-tab" data-view="photos" id="photos-tab" hidden>Photos</button>
+      <a class="view-tab" href="/about" title="About &amp; ESP32">About</a>
       <a class="view-tab" href="/admin" id="admin-link" hidden>Admin</a>
       <button type="button" class="view-tab" id="btn-logout" title="Sign out">Log out</button>
     </nav>
-    <p class="tagline">Time-aware EMA trend · gap-tolerant · kcal from slope · Grok photo ratings</p>
+    <p class="tagline" id="tagline">Time-aware EMA trend · gap-tolerant · kcal from slope</p>
   </header>
 
   <main>
@@ -202,7 +203,7 @@
       <p class="hint">Weight (left axis) and body fat % (right axis) when the scale sends BF. Lines are time-based EMAs. <span id="chart-bf-hint"></span></p>
     </section>
 
-    <section class="panel">
+    <section class="panel" id="panel-visual-ratings" hidden>
       <div class="panel-head">
         <h2>Visual ratings</h2>
         <span class="pill" id="xai-pill" title="xAI vision">Vision …</span>
@@ -259,10 +260,24 @@
               <input type="checkbox" id="set-athlete" />
               <span>Athlete mode (Renpho BF curve)</span>
             </label>
-            <span class="field-hint">Height + sex + age are pushed to the ESP32 → scale so on-device body fat can run. ESP polls <code>/api/scale-profile</code>.</span>
+            <span class="field-hint">Height + sex + age are pushed to the ESP32 → scale so on-device body fat can run. ESP polls <code>/api/scale-profile</code> with your ingest token.</span>
           </div>
           <button type="submit" class="btn">Apply</button>
         </form>
+        <div class="math-box" style="margin-top:14px;">
+          <strong>ESP32 ingest tokens</strong>
+          <p class="field-hint" style="margin:6px 0 10px;">
+            Create a token for your Renpho BLE sketch. Paste it into <code>config.h</code> as
+            <code>INGEST_TOKEN</code>. Shown once at create time; revoke anytime.
+            <a href="/about">About / download zip</a>
+          </p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
+            <input type="text" id="ingest-label" placeholder="Label (e.g. bathroom ESP)" style="flex:1;min-width:140px;background:var(--panel-2);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px;" />
+            <button type="button" class="btn" id="btn-ingest-create">Create token</button>
+          </div>
+          <p class="msg" id="ingest-msg" hidden></p>
+          <ul id="ingest-list" class="hint" style="margin:0;padding-left:18px;"></ul>
+        </div>
         <div class="math-box">
           <strong>Gap math</strong>
           <code>decay = 0.5<sup>Δt / H</sup></code>
@@ -272,10 +287,18 @@
       </div>
 
       <div class="panel">
-        <div class="panel-head">
+        <div class="panel-head" style="flex-wrap:wrap;gap:8px;">
           <h2>History</h2>
-          <button type="button" class="btn ghost" id="export-csv">Export CSV</button>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-left:auto;">
+            <button type="button" class="btn ghost" id="export-csv" title="Weights only">Export CSV</button>
+            <a class="btn ghost" id="export-zip" href="/api/export.zip" download>Download backup (ZIP)</a>
+            <label class="btn ghost" style="cursor:pointer;margin:0;">
+              Import backup
+              <input type="file" id="import-zip" accept=".zip,application/zip" hidden />
+            </label>
+          </div>
         </div>
+        <p class="hint" id="import-msg" hidden style="margin:8px 0 0;"></p>
         <div class="table-wrap">
           <table id="hist">
             <thead>
@@ -327,8 +350,8 @@
           <input type="text" id="p-note" maxlength="200" placeholder="morning, lighting, …" />
         </label>
         <label class="check">
-          <input type="checkbox" id="p-analyze" />
-          <span>Analyze with Grok <em class="muted">(not auto on multi-user yet)</em></span>
+          <input type="checkbox" id="p-analyze" checked />
+          <span>Analyze with Grok on upload</span>
         </label>
         <button type="submit" class="btn primary" id="p-submit">Upload</button>
       </form>
@@ -351,9 +374,8 @@
 
   </main>
 
-  <footer>
-    τrend · local SQLite · 3500 kcal ≈ 1 lb body fat · photos via xAI Grok
-    · inspired by Walker’s EMA math, not affiliated
+  <footer id="site-footer">
+    τrend · 3500 kcal ≈ 1 lb body fat · inspired by Walker’s EMA math, not affiliated
   </footer>
 
   <dialog id="photo-dialog">
@@ -441,7 +463,7 @@
   </dialog>
 
   <script src="/bf_axis.js?v=27"></script>
-  <script src="/app.js?v=31"></script>
-  <script src="/photos-ui.js?v=27"></script>
+  <script src="/app.js?v=33"></script>
+  <script src="/photos-ui.js?v=31"></script>
 </body>
 </html>

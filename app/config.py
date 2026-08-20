@@ -33,6 +33,18 @@ class Settings(BaseSettings):
     google_client_secret: str = ""
     google_redirect_uri: str = "http://127.0.0.1:8511/api/auth/google/callback"
 
+    # Public site URL for email verification links (no trailing slash)
+    public_base_url: str = "http://127.0.0.1:8511"
+
+    # SMTP — required for email/password registration (fail closed if unset)
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_starttls: bool = True
+    smtp_ssl: bool = False  # use SMTPS (port 465) instead of STARTTLS
+
     daily_limit_coach: int = 20
     daily_limit_vision: int = 10
     daily_limit_imagine: int = 5

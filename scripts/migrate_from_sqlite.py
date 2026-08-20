@@ -59,11 +59,13 @@ def main() -> None:
             db.commit()
             user.password_hash = hash_password(args.password)
             user.name = args.name
+            user.email_verified = True
         else:
             user = User(
                 email=email,
                 password_hash=hash_password(args.password),
                 name=args.name,
+                email_verified=True,
             )
             db.add(user)
             db.commit()
