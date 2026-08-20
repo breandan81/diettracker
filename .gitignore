@@ -25,5 +25,7 @@ esp32/**/config.h
 esp32/**/test/test_scale_session
 
 secrets.env
+secrets.example.env.bak
 secrets.php
 .env
+*.egg-info/
