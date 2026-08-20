@@ -1,4 +1,4 @@
-/* Hacker's Diet — frontend */
+/* τrend — frontend */
 (() => {
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => [...document.querySelectorAll(sel)];
@@ -314,7 +314,7 @@
           "Target acquired. Trend locked.",
         ]),
         msg: pick([
-          "Maintain with small corrections — that's the whole Hacker's Diet trick. Don't celebrate with a surplus (unless you want to).",
+          "Maintain with small corrections — that's the whole trend trick. Don't celebrate with a surplus (unless you want to).",
           "The hard part is staying here. Watch the trend, not the daily noise.",
         ]),
         progress: 100,
@@ -1201,7 +1201,7 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `hackers-diet-${todayISO()}.csv`;
+    a.download = `trend-${todayISO()}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   });

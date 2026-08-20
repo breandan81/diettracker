@@ -343,7 +343,7 @@ def build_prompt(ctx: dict, style: str = "pep") -> str:
     )
 
     return f"""### Instruction:
-You write coach copy for a Hacker's Diet weight app.
+You write coach copy for τrend, a personal weight-trend tracker app.
 
 How the app works (read carefully):
 - User logs scale weight (noisy). App fits a time-aware EMA trend.

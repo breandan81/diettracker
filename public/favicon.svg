@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="τrend">
+  <rect width="32" height="32" rx="7" fill="#141824"/>
+  <rect x="0.5" y="0.5" width="31" height="31" rx="6.5" fill="none" stroke="rgba(91,159,212,0.45)"/>
+  <text x="16" y="23" text-anchor="middle" font-family="IBM Plex Sans, system-ui, sans-serif" font-size="20" font-weight="700" fill="#5b9fd4">τ</text>
+</svg>

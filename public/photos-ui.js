@@ -238,6 +238,10 @@
     const msg = $("#pd-proj-msg");
     const goalScores = $("#pd-goal-scores");
     const compare = document.querySelector(".pd-compare-scores");
+    // Never show At-goal vision scores — preview is visual-only
+    if (goalScores) goalScores.hidden = true;
+    compare?.classList.remove("has-goal");
+
     if (p?.has_projection && p.projection_url) {
       $("#pd-proj-img").src = p.projection_url + "?t=" + Date.now();
       const g = p.projection_goal_lb != null ? fmt(p.projection_goal_lb, 0) : "?";
@@ -249,43 +253,17 @@
       wrap.hidden = false;
       imgs?.classList.add("has-projection");
 
-      if (goalScores) goalScores.hidden = false;
-      compare?.classList.add("has-goal");
-      const ps = p.projection_appearance_score;
-      const pb = p.projection_bmi_point;
-      const plo = p.projection_bmi_low;
-      const phi = p.projection_bmi_high;
-      $("#pd-proj-score").textContent =
-        ps != null ? `${fmt(ps, 1)} / 10` : "—";
-      $("#pd-proj-bmi").textContent =
-        pb != null
-          ? `${fmt(pb, 1)}${plo != null && phi != null ? ` (${fmt(plo, 1)}–${fmt(phi, 1)})` : ""}`
-          : "—";
-      $("#pd-proj-conf").textContent = p.projection_confidence_overall || "—";
-      $("#pd-proj-just").textContent =
-        p.projection_appearance_justification || "";
-
       if (msg) {
         const bits = [];
         if (p.projection_model) bits.push(`Imagine · ${p.projection_model}`);
-        if (p.projection_analysis_model) bits.push(`re-rated · ${p.projection_analysis_model}`);
-        if (ps != null && p.appearance_score != null) {
-          const delta = Number(ps) - Number(p.appearance_score);
-          bits.push(
-            delta >= 0
-              ? `appearance +${delta.toFixed(1)}`
-              : `appearance ${delta.toFixed(1)}`
-          );
-        }
-        msg.textContent = bits.join(" · ") || "Goal projection ready";
+        bits.push("visual preview only");
+        msg.textContent = bits.join(" · ");
         msg.className = "hint ok";
         msg.hidden = false;
       }
     } else {
       wrap.hidden = true;
       imgs?.classList.remove("has-projection");
-      if (goalScores) goalScores.hidden = true;
-      compare?.classList.remove("has-goal");
       if (msg) msg.hidden = true;
     }
   }
@@ -438,8 +416,7 @@
     const prev = btn.textContent;
     btn.textContent = "Imagining…";
     if (msg) {
-      msg.textContent =
-        "Grok Imagine → goal photo, then re-rating appearance (can take a bit)…";
+      msg.textContent = "Grok Imagine → goal preview (can take a bit)…";
       msg.className = "hint";
       msg.hidden = false;
     }

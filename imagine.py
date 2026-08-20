@@ -61,7 +61,7 @@ def _http_json(url: str, payload: dict, api_key: str, timeout: float = 180.0) ->
 
 
 def _download(url: str, timeout: float = 120.0) -> Tuple[bytes, str]:
-    req = urllib.request.Request(url, headers={"User-Agent": "hackers-diet/1.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "trend/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         data = resp.read()
         ctype = resp.headers.get("Content-Type") or "image/jpeg"

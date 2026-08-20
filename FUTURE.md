@@ -3,7 +3,7 @@
 ## Renpho BLE auto-ingest (ES-CS20M / Elis 1)
 
 **Status:** Working on ESP32-C3 — one POST per scale power-on (claim-before-HTTP + cooldown), body fat via `/api/scale-profile`. See [`esp32/`](./esp32/).  
-**Goal:** When you step on the Renpho scale, weight lands in Hacker's Diet automatically — no web UI action.
+**Goal:** When you step on the Renpho scale, weight lands in τrend automatically — no web UI action.
 
 ### How it works (auto, not click-to-sync)
 

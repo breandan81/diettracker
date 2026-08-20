@@ -1,6 +1,8 @@
-# Hacker's Diet — weight trend tracker
+# τrend — weight trend tracker
 
-Local Tom Servo webapp in the spirit of John Walker's *[The Hacker's Diet](https://www.fourmilab.ch/hackdiet/)*: log irregular weigh-ins, smooth them with a **time-aware EMA**, and turn the trend slope into an energy-balance estimate — plus body fat, BMI, AI pep talks, progress photos, and optional Renpho BLE auto-log via ESP32.
+Local Tom Servo webapp for irregular weigh-ins smoothed with a **time-aware EMA**, plus body fat, BMI, AI pep talks, progress photos, and optional Renpho BLE auto-log via ESP32.
+
+The EMA math is inspired by John Walker’s *[The Hacker's Diet](https://www.fourmilab.ch/hackdiet/)* — **τrend is not affiliated** with that book or its author.
 
 Runs at **http://host:8510/** (SQLite under `data/weights.db`).
 
@@ -37,7 +39,7 @@ Runs at **http://host:8510/** (SQLite under `data/weights.db`).
 - Photos view: upload dated progress shots
 - **Grok vision** rates appearance (1–10) and visual BMI
 - Chart overlays appearance, visual BMI, and scale BMI at weigh-ins
-- **Imagine** goal projections from a photo toward goal weight
+- **Imagine** goal projections from a photo toward goal weight (visual preview only — not re-rated)
 - Requires `XAI_API_KEY` / `GROK_API_KEY` in gitignored `secrets.env`
 
 ### Renpho BLE auto-log (ESP32)

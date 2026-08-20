@@ -3,13 +3,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hacker's Diet — Weight Trend</title>
+  <title>τrend — weight trend tracker</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/favicon.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-  <link rel="stylesheet" href="/style.css?v=17" />
+  <link rel="stylesheet" href="/style.css?v=18" />
 </head>
 <body class="mood-idle" id="body-mood">
   <div id="fx-layer" aria-hidden="true"></div>
@@ -19,7 +21,10 @@
       <a class="back" href="/" id="portal-link" title="Tom Servo portal">← portal</a>
       <div>
         <div class="tag">signal processing · body mass</div>
-        <h1>Hacker's Diet</h1>
+        <h1 class="wordmark" aria-label="Trend">
+          <img class="wordmark-img" src="/img/trend-mark.svg" width="160" height="32" alt="" />
+          <span class="wordmark-text"><span class="tau">τ</span>rend</span>
+        </h1>
       </div>
     </div>
     <nav class="view-tabs" id="view-tabs">
@@ -212,7 +217,7 @@
           <label>
             <span>EMA half-life (days)</span>
             <input type="number" id="set-half" step="0.5" min="0.5" max="90" />
-            <span class="field-hint">~7d ≈ classic Hacker's Diet α≈0.1 on daily data. Longer = smoother, slower to react.</span>
+            <span class="field-hint">~7d ≈ classic daily α≈0.1. Longer = smoother, slower to react.</span>
           </label>
           <label>
             <span>Goal weight (lb, optional)</span>
@@ -333,7 +338,8 @@
   </main>
 
   <footer>
-    Local only · SQLite on this host · 3500 kcal ≈ 1 lb body fat · photos via xAI Grok
+    τrend · local SQLite · 3500 kcal ≈ 1 lb body fat · photos via xAI Grok
+    · inspired by Walker’s EMA math, not affiliated
   </footer>
 
   <dialog id="photo-dialog">
@@ -375,7 +381,7 @@
         <div class="dialog-actions">
           <button type="button" class="btn danger" id="pd-delete">Delete</button>
           <button type="button" class="btn ghost" id="pd-reanalyze">Re-analyze</button>
-          <button type="button" class="btn primary" id="pd-project" title="Grok Imagine: preview at goal weight">
+          <button type="button" class="btn primary" id="pd-project" title="Grok Imagine: visual preview at goal weight (not re-rated)">
             Preview at goal
           </button>
           <span class="grow"></span>
@@ -420,8 +426,8 @@
     </form>
   </dialog>
 
-  <script src="/bf_axis.js?v=17"></script>
-  <script src="/app.js?v=17"></script>
-  <script src="/photos-ui.js?v=17"></script>
+  <script src="/bf_axis.js?v=18"></script>
+  <script src="/app.js?v=18"></script>
+  <script src="/photos-ui.js?v=18"></script>
 </body>
 </html>

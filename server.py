@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hacker's Diet style weight tracker — SQLite + stdlib HTTP server."""
+"""τrend weight trend tracker — SQLite + stdlib HTTP server."""
 
 from __future__ import annotations
 
@@ -355,7 +355,7 @@ class Handler(SimpleHTTPRequestHandler):
                     200,
                     {
                         "ok": True,
-                        "service": "hackers-diet",
+                        "service": "trend",
                         "xai": xai_status(),
                         "kobold": kobold_status(),
                     },
@@ -998,7 +998,7 @@ class Handler(SimpleHTTPRequestHandler):
 def main() -> None:
     PUBLIC.mkdir(parents=True, exist_ok=True)
     httpd = ThreadingHTTPServer((HOST, PORT), Handler)
-    print(f"Hacker's Diet tracker on http://{HOST}:{PORT}/  db={DB_PATH}", flush=True)
+    print(f"τrend tracker on http://{HOST}:{PORT}/  db={DB_PATH}", flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

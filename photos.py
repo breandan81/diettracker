@@ -340,30 +340,8 @@ def save_goal_projection(
     out_path = photos_dir(data_dir) / fname
     out_path.write_bytes(result["bytes"])
 
-    # Re-rate the projected image with the same vision analyzer
-    proj_analysis_json = None
-    proj_bmi_point = proj_bmi_low = proj_bmi_high = None
-    proj_score = None
-    proj_just = None
-    proj_conf = None
-    proj_analysis_model = None
-    try:
-        analysis = analyze_image_file(out_path, result["mime"])
-        meta = analysis.pop("_meta", {})
-        proj_analysis_json = json.dumps(analysis)
-        bmi = analysis.get("bmi_estimate") or {}
-        app = analysis.get("appearance_rating") or {}
-        proj_bmi_point = bmi.get("point")
-        proj_bmi_low = bmi.get("range_low")
-        proj_bmi_high = bmi.get("range_high")
-        proj_score = app.get("score")
-        proj_just = app.get("justification")
-        proj_conf = analysis.get("confidence_overall")
-        proj_analysis_model = meta.get("model")
-    except Exception as e:
-        # Keep the Imagine result even if re-rate fails; surface error in prompt note
-        proj_just = f"(projection saved; re-rate failed: {e})"
-
+    # Visual preview only — do not re-rate the Imagine output with vision
+    # (expensive and misleading; keep At-goal as an image, not scored BMI).
     conn.execute(
         """
         UPDATE photos SET
@@ -373,14 +351,14 @@ def save_goal_projection(
             projection_model=?,
             projection_goal_lb=?,
             projection_created_at=?,
-            projection_analysis_json=?,
-            projection_bmi_point=?,
-            projection_bmi_low=?,
-            projection_bmi_high=?,
-            projection_appearance_score=?,
-            projection_appearance_justification=?,
-            projection_confidence_overall=?,
-            projection_analysis_model=?,
+            projection_analysis_json=NULL,
+            projection_bmi_point=NULL,
+            projection_bmi_low=NULL,
+            projection_bmi_high=NULL,
+            projection_appearance_score=NULL,
+            projection_appearance_justification=NULL,
+            projection_confidence_overall=NULL,
+            projection_analysis_model=NULL,
             updated_at=?
         WHERE id=?
         """,
@@ -391,14 +369,6 @@ def save_goal_projection(
             result["model"],
             goal_lb,
             now_iso,
-            proj_analysis_json,
-            proj_bmi_point,
-            proj_bmi_low,
-            proj_bmi_high,
-            proj_score,
-            proj_just,
-            proj_conf,
-            proj_analysis_model,
             now_iso,
             pid,
         ),

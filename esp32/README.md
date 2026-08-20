@@ -1,4 +1,4 @@
-# ESP32 → Hacker's Diet (Renpho ES-CS20M / Elis 1)
+# ESP32 → τrend (Renpho ES-CS20M / Elis 1)
 
 Sketch that sits near the scale, hears a weigh-in over BLE, and `POST`s weight to:
 
