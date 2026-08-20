@@ -53,13 +53,19 @@ a { color: var(--accent); }
   white-space: nowrap;
 }
 .back:hover { color: var(--text); border-color: var(--accent); }
+.brand-titles {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
 .tag {
   font-family: var(--mono);
   font-size: 11px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--accent);
-  margin-bottom: 4px;
+  margin: 0;
 }
 h1 {
   margin: 0;
@@ -74,12 +80,23 @@ h1 {
   margin: 0;
   line-height: 1;
 }
+.wordmark-banner {
+  display: block;
+  height: 86px; /* ~20% larger than 72px */
+  width: auto;
+  max-width: min(500px, 85vw);
+  object-fit: contain;
+  object-position: left center;
+  background: transparent;
+}
+@media (max-width: 520px) {
+  .wordmark-banner { height: 67px; }
+}
 .wordmark-img {
   display: block;
   height: 32px;
   width: auto;
 }
-/* Text fallback if SVG fails to load */
 .wordmark-text {
   display: none;
   font-size: 28px;

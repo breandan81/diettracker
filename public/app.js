@@ -24,18 +24,6 @@
   };
   let currentMoodImg = "idle";
 
-  // Portal back-link: if served on :8510, point home at same host :80
-  (() => {
-    const a = $("#portal-link");
-    if (!a) return;
-    const host = location.hostname;
-    if (location.port && location.port !== "80" && location.port !== "") {
-      a.href = `${location.protocol}//${host}/`;
-    } else {
-      a.href = "/";
-    }
-  })();
-
   function fmt(n, digits = 1) {
     if (n == null || Number.isNaN(n)) return "—";
     return Number(n).toFixed(digits);
