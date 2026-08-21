@@ -672,7 +672,7 @@ def coach_status(user: User = Depends(get_current_user), db: Session = Depends(g
     return {
         "ok": bool(settings.xai_api_key),
         "provider": "xai",
-        "model": settings.xai_model,
+        "model": settings.xai_coach_model or settings.xai_model,
         "configured": bool(settings.xai_api_key),
         "usage_today": usage,
         "limits": limits,
@@ -685,7 +685,7 @@ def vision_status(user: User = Depends(get_current_user), db: Session = Depends(
 
     return {
         "ok": bool(settings.xai_api_key),
-        "model": settings.xai_model,
+        "model": settings.xai_coach_model or settings.xai_model,
         "configured": bool(settings.xai_api_key),
         "base_url": "https://api.x.ai/v1",
         "usage_today": usage_for_user(db, user.id),

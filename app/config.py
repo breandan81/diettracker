@@ -26,7 +26,11 @@ class Settings(BaseSettings):
     admin_user_ids: str = ""  # comma-separated ints
 
     xai_api_key: str = ""
+    # Vision / general Grok calls
     xai_model: str = "grok-4.6"
+    # Coach pep talks — prefer a non-reasoning chat model (grok-4.6 defaults to
+    # high reasoning and can spend ~40s + 1k reasoning tokens on four short lines).
+    xai_coach_model: str = "grok-4.20-0309-non-reasoning"
     xai_imagine_model: str = "grok-imagine-image-2.0"
 
     google_client_id: str = ""

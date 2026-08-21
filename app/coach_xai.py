@@ -35,10 +35,12 @@ def generate_pep_xai(
     ctx = build_context(series, summ, settings, photos=photos)
     prompt = build_prompt(ctx, style=style)
     style_key = style if style in _STYLE_TEMPERATURE else "pep"
+    model = (cfg.xai_coach_model or cfg.xai_model or "grok-4.20-0309-non-reasoning").strip()
 
     payload = {
-        "model": cfg.xai_model,
+        "model": model,
         "temperature": _STYLE_TEMPERATURE[style_key],
+        "max_tokens": 220,
         "messages": [
             {
                 "role": "system",
@@ -64,7 +66,7 @@ def generate_pep_xai(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=45) as resp:
             result = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace") if e.fp else ""
@@ -80,7 +82,7 @@ def generate_pep_xai(
     parsed["style"] = style
     parsed["confidence"] = ctx.get("confidence")
     parsed["briefing"] = ctx.get("narrative")
-    parsed["model"] = cfg.xai_model
+    parsed["model"] = model
     parsed["provider"] = "xai"
     parsed["context"] = {
         "trend": ctx.get("trend"),
