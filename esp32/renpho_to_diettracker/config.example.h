@@ -7,10 +7,13 @@
 #define WIFI_SSID     "your-ssid"
 #define WIFI_PASS     "your-password"
 
-// Prefer a LAN IP; mDNS (tomservo.local) is unreliable on some ESP32 builds.
-// Multi-user τrend often runs on 8511; single-user personal app on 8510.
-#define TRACKER_HOST  "192.168.1.50"
-#define TRACKER_PORT  8511
+// Prefer a LAN IP for local testing; use the public hostname for Linode.
+// Multi-user local: 8511. Linode behind Caddy: HTTPS on 443.
+#define TRACKER_HOST  "tau.bposhaughnessy.com"
+#define TRACKER_PORT  443
+
+// 1 = https:// (Linode / any TLS reverse proxy). 0 = http:// (LAN).
+#define TRACKER_TLS   1
 
 // Optional path prefix if you reverse-proxy later
 #define TRACKER_PATH  "/api/weights"

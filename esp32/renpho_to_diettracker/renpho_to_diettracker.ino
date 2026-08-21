@@ -3,7 +3,7 @@
  *
  * Listens for a weigh-in over BLE, then POSTs:
  *   {"weight":197.4,"body_fat":25.8,"note":"renpho-ble"}
- * to http://TRACKER_HOST:8510/api/weights
+ * to TRACKER_HOST (http or https) /api/weights with optional Bearer ingest token.
  * (server stamps logged_at; date is derived there).
  *
  * One POST per scale power-on: ScaleSession claims before HTTP so spam
@@ -21,7 +21,9 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include <time.h>
+#include <string.h>
 #include <NimBLEDevice.h>
 
 #include "config.h"
@@ -30,6 +32,37 @@
 #ifndef RESCAN_COOLDOWN_SECONDS
 #define RESCAN_COOLDOWN_SECONDS 90
 #endif
+
+#ifndef TRACKER_TLS
+#define TRACKER_TLS 0
+#endif
+
+static String trackerUrl(const char* path) {
+  String u;
+#if TRACKER_TLS
+  u = String("https://") + TRACKER_HOST;
+  if (TRACKER_PORT != 443) {
+    u += ":";
+    u += String(TRACKER_PORT);
+  }
+#else
+  u = String("http://") + TRACKER_HOST + ":" + String(TRACKER_PORT);
+#endif
+  u += path;
+  return u;
+}
+
+// Begin HTTP(S). Caller must http.end(). Returns false if begin failed.
+static bool httpBeginTracker(HTTPClient& http, WiFiClientSecure& tls, const String& url) {
+#if TRACKER_TLS
+  // Hobby deploy: skip CA verify (Caddy/Let's Encrypt still encrypts in transit).
+  tls.setInsecure();
+  return http.begin(tls, url);
+#else
+  (void)tls;
+  return http.begin(url);
+#endif
+}
 
 // --- QN GATT (FFF0 layout used by many Renpho ES-CS20M units) ---
 static NimBLEUUID UUID_SVC_FFF0("fff0");
@@ -66,6 +99,13 @@ static ScaleSession g_session((uint32_t)RESCAN_COOLDOWN_SECONDS * 1000u);
 static bool g_sentUnit = false;
 static bool g_sentInit = false;
 static bool g_sentProfile = false;
+// Defer HTTPS profile refresh until GATT is idle (C3 WiFi+BLE share one radio)
+static bool g_profileRefreshPending = false;
+// Defer weight POST to loop() so we never TLS while GATT notify is on the stack
+static bool g_pendingPost = false;
+static float g_pendingPostLb = 0;
+static float g_pendingPostBf = -1;
+static char g_pendingPostVia[40] = "";
 
 // Cached profile from diet tracker /api/scale-profile
 static bool g_profileReady = false;
@@ -134,6 +174,21 @@ static void stopScanQuiet() {
   }
 }
 
+/** Drop GATT so WiFi/TLS can use the C3 radio. Safe to call more than once. */
+static void releaseGattForWifi(const char* why) {
+  stopScanQuiet();
+  if (g_client && g_client->isConnected()) {
+    Serial.printf("[ble] disconnect before WiFi (%s)\n", why);
+    g_client->disconnect();
+    delay(150);
+  }
+  g_notifyChr = nullptr;
+  g_cmdChr = nullptr;
+  g_haveTarget = false;
+  g_wantConnect = false;
+  g_endSession = false;
+}
+
 static bool postMeasurement(float lb, float bodyFatPct /* <0 if unknown */) {
   if (!g_wifiReady) {
     Serial.println("[http] wifi not ready");
@@ -144,12 +199,12 @@ static bool postMeasurement(float lb, float bodyFatPct /* <0 if unknown */) {
     return false;
   }
 
-  // C3 shares radio between WiFi + BLE — pause scan during HTTP
-  stopScanQuiet();
-  delay(50);
+  // Must not hold a BLE link during HTTPS — otherwise http.POST returns -1 on C3
+  releaseGattForWifi("POST /api/weights");
+  delay(TRACKER_TLS ? 200 : 50);
 
   // Do NOT send logged_at — the diet tracker stamps with its own system clock.
-  String url = String("http://") + TRACKER_HOST + ":" + String(TRACKER_PORT) + TRACKER_PATH;
+  String url = trackerUrl(TRACKER_PATH);
   String body = String("{\"weight\":") + String(lb, 2);
   if (bodyFatPct >= 0.0f && bodyFatPct <= 80.0f) {
     body += ",\"body_fat\":" + String(bodyFatPct, 1);
@@ -159,8 +214,9 @@ static bool postMeasurement(float lb, float bodyFatPct /* <0 if unknown */) {
   Serial.printf("[http] POST %s  %s\n", url.c_str(), body.c_str());
 
   HTTPClient http;
-  http.setTimeout(8000);
-  if (!http.begin(url)) {
+  WiFiClientSecure tls;
+  http.setTimeout(20000);
+  if (!httpBeginTracker(http, tls, url)) {
     Serial.println("[http] begin failed");
     return false;
   }
@@ -172,10 +228,15 @@ static bool postMeasurement(float lb, float bodyFatPct /* <0 if unknown */) {
 #endif
   int code = http.POST(body);
   String resp = http.getString();
+  if (code < 0) {
+    Serial.printf("[http] -> %d (%s)\n", code, http.errorToString(code).c_str());
+  } else {
+    Serial.printf("[http] -> %d  %s\n", code, resp.substring(0, 160).c_str());
+  }
   http.end();
-  delay(50);
 
-  Serial.printf("[http] -> %d  %s\n", code, resp.substring(0, 160).c_str());
+  // After WiFi/TLS, BLE needs a quiet period before scanning again
+  delay(TRACKER_TLS ? 400 : 50);
   if (code >= 200 && code < 300) {
     g_lastPostedLb = lb;
     g_lastPostedMs = millis();
@@ -186,7 +247,8 @@ static bool postMeasurement(float lb, float bodyFatPct /* <0 if unknown */) {
 
 /**
  * Called only after ScaleSession has already claimed the measurement.
- * Claim-before-HTTP means duplicate finals cannot reach here twice.
+ * Queues HTTPS for loop() so we never TLS on the BLE notify stack, and
+ * always drops GATT first (C3 WiFi+BLE coexistence).
  */
 static void postClaimedMeasurement(const ScaleMeasurement& m, const char* via) {
   float lb = kgToLb(m.weight_kg);
@@ -196,15 +258,37 @@ static void postClaimedMeasurement(const ScaleMeasurement& m, const char* via) {
   } else {
     Serial.printf("[weight] %.2f kg = %.2f lb  via %s\n", m.weight_kg, lb, via);
   }
+
+  if (g_pendingPost) {
+    Serial.println("[http] post already queued — ignoring duplicate final");
+    return;
+  }
+  g_pendingPostLb = lb;
+  g_pendingPostBf = m.body_fat;
+  strncpy(g_pendingPostVia, via ? via : "?", sizeof(g_pendingPostVia) - 1);
+  g_pendingPostVia[sizeof(g_pendingPostVia) - 1] = '\0';
+  g_pendingPost = true;
+  // Free the radio immediately; HTTP runs in loop()
+  releaseGattForWifi("queue post");
+  // Claimed + disconnect → cooldown until onPostSuccess/Failure settles it
+  g_session.onDisconnected(millis());
+}
+
+static void servicePendingPost() {
+  if (!g_pendingPost) return;
+  g_pendingPost = false;
+  float lb = g_pendingPostLb;
+  float bf = g_pendingPostBf;
+  Serial.printf("[http] sending queued post (via %s)\n", g_pendingPostVia);
   uint32_t now = millis();
-  if (postMeasurement(lb, m.body_fat)) {
+  if (postMeasurement(lb, bf)) {
     g_session.onPostSuccess(now);
-    g_endSession = true;  // disconnect in loop(); stay dark until cooldown ends
     Serial.printf("[gatt] posted — sleeping %ds (one log per scale session)\n",
                   RESCAN_COOLDOWN_SECONDS);
   } else {
     g_session.onPostFailure(now);
-    Serial.println("[gatt] post failed — will accept another final this session");
+    Serial.println("[gatt] post failed — re-armed for next scale power-on");
+    if (g_session.isArmed()) startScan();
   }
 }
 
@@ -300,10 +384,11 @@ static bool jsonExtractBool(const String& body, const char* key, bool* out) {
 
 static bool fetchScaleProfile() {
   if (!g_wifiReady) return false;
-  String url = String("http://") + TRACKER_HOST + ":" + String(TRACKER_PORT) + "/api/scale-profile";
+  String url = trackerUrl("/api/scale-profile");
   HTTPClient http;
-  http.setTimeout(5000);
-  if (!http.begin(url)) return false;
+  WiFiClientSecure tls;
+  http.setTimeout(12000);
+  if (!httpBeginTracker(http, tls, url)) return false;
 #ifdef INGEST_TOKEN
   if (INGEST_TOKEN[0] != '\0') {
     http.addHeader("Authorization", String("Bearer ") + INGEST_TOKEN);
@@ -410,9 +495,10 @@ static void handleQnNotify(uint8_t* data, size_t len) {
     // extended wants profile when length==0x05
     if (flen == 0x05 && !g_sentProfile) {
       g_sentProfile = true;
-      // refresh profile right before answering when stale
+      // NEVER call HTTPS here — WiFi TLS while GATT is up drops notifies on C3.
       if (!g_profileReady || (millis() - g_profileFetchedMs) > 60000UL) {
-        fetchScaleProfile();
+        g_profileRefreshPending = true;
+        Serial.println("[gatt] profile stale — will HTTPS-refresh after this session");
       }
       sendUserProfile();
     }
@@ -423,6 +509,11 @@ static void handleQnNotify(uint8_t* data, size_t len) {
     Serial.printf("[gatt] op=0x%02X len=%u flen=%u\n", op, (unsigned)len, flen);
     return;
   }
+
+  // Always log weight-ish frames so second-session silence is diagnosable
+  Serial.printf("[gatt] 0x10 flen=%u len=%u", flen, (unsigned)len);
+  for (size_t i = 0; i < len && i < 16; i++) Serial.printf(" %02X", data[i]);
+  Serial.println();
 
   if (g_session.hasClaimed() || g_session.phase() != ScalePhase::InSession) return;
 
@@ -442,7 +533,7 @@ static void handleQnNotify(uint8_t* data, size_t len) {
     if (status == 1 && kg > 0) {
       Serial.printf("[gatt] stable %.2f kg — waiting for BF frame\n", kg);
     } else if (status == 0) {
-      Serial.printf("[gatt] extended unstable status=%u\n", status);
+      Serial.printf("[gatt] extended unstable status=%u kg=%.2f\n", status, kg);
     }
     if (g_session.onExtendedFrame(now, status, kg, bf, &m)) {
       postClaimedMeasurement(m, "gatt-extended-final");
@@ -463,7 +554,10 @@ static void handleQnNotify(uint8_t* data, size_t len) {
     if (g_session.onBasicFrame(now, status, kg, &m)) {
       postClaimedMeasurement(m, status == 0x01 ? "gatt-basic-final" : "gatt-basic");
     }
+    return;
   }
+
+  Serial.printf("[gatt] 0x10 unparsed flen=%u — not basic/extended layout\n", flen);
 }
 
 static void notifyCB(NimBLERemoteCharacteristic* chr, uint8_t* data, size_t len, bool isNotify) {
@@ -540,8 +634,15 @@ static bool connectAndSubscribe(const NimBLEAddress& addr) {
   delay(100);
   // Proactive init helps some firmwares; 0x12/0x14 handlers cover the rest
   sendMeasurementInit();
+  // FFE0 / many QN units won't stream 0x10 weight frames until they have a profile.
+  // Send cached profile only — never HTTPS while connected.
+  delay(80);
+  if (g_profileReady && !g_sentProfile) {
+    g_sentProfile = true;
+    sendUserProfile();
+  }
 
-  Serial.println("[gatt] subscribed — step on scale");
+  Serial.println("[gatt] subscribed — stand still for final reading");
   return true;
 }
 
@@ -582,7 +683,17 @@ class ScanCallbacks : public NimBLEScanCallbacks {
 
 #if BLE_MODE == MODE_GATT || BLE_MODE == MODE_AUTO
     // Look for connectable QN / Renpho
-    if (!g_session.shouldConnect(millis())) return;
+    if (!g_session.shouldConnect(millis())) {
+      // Help diagnose "second weigh-in does nothing" — often still in post-success cooldown
+      static uint32_t lastCdPrint = 0;
+      uint32_t rem = g_session.cooldownRemainingMs(millis());
+      if (rem > 0 && (millis() - lastCdPrint) > 5000) {
+        Serial.printf("[ble] cooldown %lus left — let the scale power off, then wait for armed\n",
+                      (unsigned long)((rem + 999) / 1000));
+        lastCdPrint = millis();
+      }
+      return;
+    }
     if ((nameOk || macForced) && adv->isConnectable()) {
       bool hasFff0 = adv->isAdvertisingService(UUID_SVC_FFF0);
       bool hasFfe0 = adv->isAdvertisingService(UUID_SVC_FFE0);
@@ -671,8 +782,8 @@ void setup() {
   Serial.begin(SERIAL_BAUD);
   delay(200);
   Serial.println();
-  Serial.println(F("=== Renpho → Hacker's Diet (ESP32) ==="));
-  Serial.printf("mode=%d tracker=%s:%d\n", BLE_MODE, TRACKER_HOST, TRACKER_PORT);
+  Serial.println(F("=== Renpho → τrend (ESP32) ==="));
+  Serial.printf("mode=%d tracker=%s:%d tls=%d\n", BLE_MODE, TRACKER_HOST, TRACKER_PORT, TRACKER_TLS);
 
   ensureWifi();
   if (g_wifiReady) fetchScaleProfile();
@@ -685,6 +796,9 @@ void setup() {
 }
 
 void loop() {
+  // HTTPS weight upload (never from BLE notify callback)
+  servicePendingPost();
+
   if (WiFi.status() != WL_CONNECTED) {
     static uint32_t lastTry = 0;
     if (millis() - lastTry > 10000) {
@@ -695,15 +809,19 @@ void loop() {
         Serial.println("[ble] wifi recovered");
         g_haveTarget = false;
         g_wantConnect = false;
-        fetchScaleProfile();
+        if (!g_pendingPost) fetchScaleProfile();
         if (g_session.isArmed()) {
           Serial.println("[ble] restarting scan");
           startScan();
         }
       }
     }
-  } else if (millis() - g_profileFetchedMs > 300000UL) {
-    // refresh profile every 5 minutes
+  } else if (!g_pendingPost &&
+             !(g_client && g_client->isConnected()) &&
+             (g_profileRefreshPending ||
+              (millis() - g_profileFetchedMs > 300000UL))) {
+    // Refresh profile only when GATT is idle (WiFi TLS vs BLE coexistence)
+    g_profileRefreshPending = false;
     fetchScaleProfile();
   }
 
@@ -750,14 +868,32 @@ void loop() {
     startScan();
   }
 
-  // If connected but idle too long, disconnect and rescan (only if armed)
+  // If connected but no final arrives, drop and rescan.
+  // Idle scales often advertise after a prior weigh-in — we handshake, then sit forever.
   static uint32_t connectedAt = 0;
+  static uint32_t lastWaitPrint = 0;
   static bool wasConnected = false;
   if (g_client && g_client->isConnected()) {
     wasConnected = true;
-    if (connectedAt == 0) connectedAt = millis();
-    if (millis() - connectedAt > 45000) {
-      Serial.println("[gatt] session timeout — disconnect");
+    if (connectedAt == 0) {
+      connectedAt = millis();
+      lastWaitPrint = 0;
+    }
+    const uint32_t idleMs = millis() - connectedAt;
+    // Heartbeat so serial isn't silent while waiting for a final frame
+    if (!g_session.hasClaimed() && (millis() - lastWaitPrint) > 4000) {
+      Serial.printf("[gatt] waiting for weight frame… %lus\n",
+                    (unsigned long)(idleMs / 1000));
+      lastWaitPrint = millis();
+    }
+    // Unclaimed sessions: give up sooner so the next power-on can be caught
+    const uint32_t limitMs = g_session.hasClaimed() ? 45000u : 22000u;
+    if (idleMs > limitMs) {
+      if (!g_session.hasClaimed()) {
+        Serial.println("[gatt] no weight yet — disconnect (power-cycle scale, then step on again)");
+      } else {
+        Serial.println("[gatt] session timeout — disconnect");
+      }
       g_client->disconnect();
       g_session.onDisconnected(millis());
       g_haveTarget = false;
