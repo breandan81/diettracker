@@ -909,6 +909,9 @@
     if ($("#set-sex")) $("#set-sex").value = settings.sex || "";
     if ($("#set-age")) $("#set-age").value = settings.age != null ? settings.age : "";
     if ($("#set-athlete")) $("#set-athlete").checked = !!settings.athlete;
+    if ($("#set-coach-goals")) {
+      $("#set-coach-goals").value = settings.coach_goals || "";
+    }
   }
 
   function renderTable() {
@@ -1190,6 +1193,7 @@
       $("#set-height-in").value
     );
     const ageRaw = $("#set-age")?.value;
+    const coachGoalsRaw = ($("#set-coach-goals")?.value || "").trim();
     const body = {
       half_life_days: half,
       goal_weight: goalRaw === "" ? null : parseFloat(goalRaw),
@@ -1197,6 +1201,7 @@
       sex: $("#set-sex")?.value || null,
       age: ageRaw === "" || ageRaw == null ? null : parseInt(ageRaw, 10),
       athlete: !!$("#set-athlete")?.checked,
+      coach_goals: coachGoalsRaw || null,
     };
     try {
       const data = await api("/api/settings", {

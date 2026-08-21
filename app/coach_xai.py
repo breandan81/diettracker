@@ -5,12 +5,20 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import Any, Optional
 
 from app.config import get_settings
 
 # Reuse briefing/prompt builders from the original coach module
-from coach import build_context, build_prompt, parse_coach_output  # noqa: E402
+from coach import build_context, build_prompt, parse_coach_output, style_system_blurb  # noqa: E402
+
+
+_STYLE_TEMPERATURE = {
+    "pep": 0.85,
+    "roast": 0.95,
+    "haiku": 0.55,
+    "brief": 0.45,
+}
 
 
 def generate_pep_xai(
@@ -18,23 +26,26 @@ def generate_pep_xai(
     summ: dict,
     settings: dict,
     style: str = "pep",
+    photos: Optional[list] = None,
 ) -> dict[str, Any]:
     cfg = get_settings()
     if not cfg.xai_api_key:
         raise RuntimeError("XAI_API_KEY not configured")
 
-    ctx = build_context(series, summ, settings)
+    ctx = build_context(series, summ, settings, photos=photos)
     prompt = build_prompt(ctx, style=style)
+    style_key = style if style in _STYLE_TEMPERATURE else "pep"
 
     payload = {
         "model": cfg.xai_model,
-        "temperature": 0.7,
+        "temperature": _STYLE_TEMPERATURE[style_key],
         "messages": [
             {
                 "role": "system",
                 "content": (
                     "You are the τrend weight coach. Follow the user instruction exactly. "
-                    "Output only the TITLE/MSG/TOAST/BADGE fields as specified."
+                    "Output only the TITLE/MSG/TOAST/BADGE fields as specified. "
+                    f"{style_system_blurb(style_key)}"
                 ),
             },
             {"role": "user", "content": prompt},
@@ -80,5 +91,9 @@ def generate_pep_xai(
         "confidence": ctx.get("confidence"),
         "rate_descriptor": ctx.get("rate_descriptor"),
         "energy_phrase": ctx.get("energy_phrase"),
+        "coach_goals": ctx.get("coach_goals"),
+        "body_fat_trend": ctx.get("body_fat_trend"),
+        "latest_body_fat": ctx.get("latest_body_fat"),
+        "photo_count": len(ctx.get("photo_lines") or []),
     }
     return parsed

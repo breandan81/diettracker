@@ -610,6 +610,7 @@ input[type="date"],
 input[type="datetime-local"],
 input[type="number"],
 input[type="text"],
+textarea,
 select {
   font-family: var(--mono);
   font-size: 14px;
@@ -620,10 +621,18 @@ select {
   padding: 8px 10px;
   outline: none;
 }
+textarea {
+  resize: vertical;
+  min-height: 56px;
+  line-height: 1.35;
+  width: 100%;
+  box-sizing: border-box;
+}
 select {
   min-height: 38px;
 }
-input:focus {
+input:focus,
+textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(91, 159, 212, 0.15);
 }

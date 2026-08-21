@@ -157,22 +157,108 @@ def _confidence(series: list, summ: dict) -> tuple[str, list[str]]:
     return conf, notes
 
 
-def build_context(series: list, summ: dict, settings: dict) -> dict:
+def style_system_blurb(style: str) -> str:
+    """Hard style contract for the system message (xAI) / callers."""
+    return {
+        "pep": (
+            "STYLE=pep. Sound like a witty nerdy gym buddy / sysadmin who lifts. "
+            "Encourage with light humor; zero shame; concrete and useful."
+        ),
+        "roast": (
+            "STYLE=roast. Affectionate roast of the user's habits/numbers — teasing, "
+            "never cruel or body-shaming. Still give one useful nudge. "
+            "MSG should clearly sound like a roast, not generic cheerleading."
+        ),
+        "haiku": (
+            "STYLE=haiku. MSG must be exactly one haiku written as three short phrases "
+            "separated by ' / ' (5-7-5-ish syllables). Still fill TITLE/TOAST/BADGE."
+        ),
+        "brief": (
+            "STYLE=brief. Ultra-compressed: TITLE ≤6 words; MSG exactly one short sentence "
+            "(≤18 words); TOAST ≤3 words. No fluff."
+        ),
+    }.get(style, "STYLE=pep. Witty, nerdy, encouraging.")
+
+
+def _style_guide_block(style: str) -> str:
+    """Detailed voice + output shape rules embedded in the user prompt."""
+    return {
+        "pep": (
+            "VOICE: witty, nerdy, encouraging — sysadmin who lifts. Light humor, zero shame.\n"
+            "SHAPE: TITLE max 8 words; MSG 2 short sentences, max 55 words; TOAST max 5 words; "
+            "BADGE 2-4 words ALL CAPS."
+        ),
+        "roast": (
+            "VOICE: affectionate roast — tease the scale bounce, the long gap, the surplus, "
+            "or the excuse. Never cruel, never body-shame. End with one useful nudge.\n"
+            "SHAPE: TITLE max 8 words (can be snarky); MSG 2 sentences that clearly roast then "
+            "help (max 55 words); TOAST max 5 words; BADGE 2-4 words ALL CAPS.\n"
+            "MUST: If it could pass as generic pep talk, rewrite until the roast is obvious."
+        ),
+        "haiku": (
+            "VOICE: calm, image-forward, spare.\n"
+            "SHAPE: TITLE max 6 words; MSG MUST be exactly three short phrases separated by "
+            "' / ' (haiku-ish 5/7/5); TOAST max 4 words; BADGE 2-4 words ALL CAPS.\n"
+            "Example MSG: 'Trend line falling / deficit doing the work / trust the next weigh-in'\n"
+            "MUST: Do NOT write prose paragraphs for MSG."
+        ),
+        "brief": (
+            "VOICE: clipped, factual, no fluff.\n"
+            "SHAPE: TITLE ≤6 words; MSG exactly ONE sentence ≤18 words; TOAST ≤3 words; "
+            "BADGE 2-3 words ALL CAPS.\n"
+            "MUST: Shorter than pep. No jokes, no metaphor stacks."
+        ),
+    }.get(
+        style,
+        "VOICE: witty, nerdy, encouraging.\n"
+        "SHAPE: TITLE max 8 words; MSG 2 short sentences; TOAST max 5; BADGE 2-4 ALL CAPS.",
+    )
+
+
+def build_context(
+    series: list,
+    summ: dict,
+    settings: dict,
+    photos: Optional[list] = None,
+) -> dict:
     goal = settings.get("goal_weight")
     try:
         goal_f = float(goal) if goal not in (None, "") else None
     except (TypeError, ValueError):
         goal_f = None
 
+    coach_goals = str(settings.get("coach_goals") or "").strip()
+
     mood = _mood_from_summary(summ, goal_f)
     recent = series[-8:] if series else []
     recent_lines = []
     for e in recent:
+        bf = e.get("body_fat")
+        bf_t = e.get("body_fat_trend")
+        bf_bit = ""
+        if bf is not None or bf_t is not None:
+            bf_bit = (
+                f", bf={_r(bf, 1)}%"
+                + (f", bf_trend={_r(bf_t, 1)}%" if bf_t is not None else "")
+            )
         recent_lines.append(
             f"  {e.get('date')}: scale={_r(e.get('weight'), 1)} lb, "
-            f"trend={_r(e.get('trend'), 2)} lb, "
+            f"trend={_r(e.get('trend'), 2)} lb{bf_bit}, "
             f"days_since_prev={_r(e.get('gap_days'), 0)}, "
             f"alpha={_r(e.get('alpha'), 2)}"
+        )
+
+    # Photo rating history (last ~8 analyzed), chronological
+    photo_rows = list(photos or [])[-8:]
+    photo_lines: list[str] = []
+    for p in photo_rows:
+        score = p.get("appearance_score")
+        bmi_p = p.get("bmi_point")
+        just = (p.get("appearance_justification") or "").strip()
+        just_bit = f' — "{just[:120]}"' if just else ""
+        photo_lines.append(
+            f"  {p.get('date')}: appearance={_r(score, 1)}/10, "
+            f"visual_bmi={_r(bmi_p, 1)}{just_bit}"
         )
 
     lb_left = None
@@ -269,6 +355,53 @@ def build_context(series: list, summ: dict, settings: dict) -> dict:
     elif goal_f is None:
         narrative.append("No goal weight set yet.")
 
+    # Body-fat signal (scale) — same EMA family as weight when present
+    latest_bf = summ.get("latest_body_fat")
+    bf_trend = summ.get("body_fat_trend")
+    if latest_bf is not None or bf_trend is not None:
+        narrative.append(
+            f"Scale body fat: last {_r(latest_bf, 1)}%, "
+            f"EMA bf trend {_r(bf_trend, 1)}%."
+        )
+    else:
+        narrative.append("No scale body-fat readings yet.")
+
+    if coach_goals:
+        narrative.append(
+            f"User's stated focus/goals for the coach (honor this): {coach_goals}"
+        )
+    else:
+        narrative.append(
+            "No free-form coach goals note set — lean on goal weight + trend + photos."
+        )
+
+    if photo_lines:
+        scores = [
+            float(p["appearance_score"])
+            for p in photo_rows
+            if p.get("appearance_score") is not None
+        ]
+        if scores:
+            first_s, last_s = scores[0], scores[-1]
+            delta = last_s - first_s
+            if abs(delta) < 0.3:
+                trend_word = "steady"
+            elif delta > 0:
+                trend_word = "improving"
+            else:
+                trend_word = "softening"
+            narrative.append(
+                f"Photo appearance ratings (1–10): {len(scores)} recent analyzed photos; "
+                f"latest {_r(last_s, 1)}, earlier {_r(first_s, 1)} "
+                f"({trend_word} over that window)."
+            )
+        else:
+            narrative.append(
+                f"{len(photo_lines)} recent photos have visual BMI but no appearance score."
+            )
+    else:
+        narrative.append("No analyzed progress photos yet.")
+
     for n in conf_notes:
         narrative.append(f"Caveat: {n}")
 
@@ -286,6 +419,9 @@ def build_context(series: list, summ: dict, settings: dict) -> dict:
     else:
         tone = "Warm onboarding. Get the first few weigh-ins logged."
 
+    if coach_goals:
+        tone = f"{tone} Weave in the user's stated focus: {coach_goals}."
+
     return {
         "mood": mood,
         "tone": tone,
@@ -293,12 +429,15 @@ def build_context(series: list, summ: dict, settings: dict) -> dict:
         "count": count,
         "latest_date": summ.get("latest_date"),
         "latest_weight": summ.get("latest_weight"),
+        "latest_body_fat": latest_bf,
+        "body_fat_trend": bf_trend,
         "trend": summ.get("trend"),
         "rate_lb_per_week": rate_w,
         "rate_lb_per_day": summ.get("rate_lb_per_day"),
         "kcal_per_day": kcal,
         "half_life_days": summ.get("half_life_days") or settings.get("half_life_days"),
         "goal_weight": goal_f,
+        "coach_goals": coach_goals or None,
         "lb_to_goal": lb_left,
         "eta_days": eta,
         "progress_pct": progress_pct,
@@ -307,6 +446,7 @@ def build_context(series: list, summ: dict, settings: dict) -> dict:
         "rate_descriptor": _rate_descriptor(rate_w if rate_w is not None else None),
         "energy_phrase": _energy_phrase(kcal if kcal is not None else None),
         "recent": recent_lines,
+        "photo_lines": photo_lines,
         "narrative": narrative,
         "first_weight": series[0].get("weight") if series else None,
         "first_date": series[0].get("date") if series else None,
@@ -316,20 +456,19 @@ def build_context(series: list, summ: dict, settings: dict) -> dict:
 def build_prompt(ctx: dict, style: str = "pep") -> str:
     """Build a prompt that forces paraphrase of a pre-digested briefing."""
     recent = "\n".join(ctx.get("recent") or []) or "  (none yet)"
+    photos = "\n".join(ctx.get("photo_lines") or []) or "  (none yet)"
     narrative = "\n".join(f"- {line}" for line in (ctx.get("narrative") or []))
     mood = ctx.get("mood", "idle")
-
-    style_guide = {
-        "pep": "witty, nerdy, encouraging — sysadmin who lifts. Light humor, zero shame.",
-        "roast": "affectionate roast, never cruel, still useful.",
-        "haiku": "MSG is one haiku as three short phrases separated by ' / '. Still fill all four fields.",
-        "brief": "ultra-short: TITLE ≤6 words, MSG one sentence.",
-    }.get(style, "witty, nerdy, encouraging.")
+    style_key = style if style in ("pep", "roast", "haiku", "brief") else "pep"
+    style_guide = _style_guide_block(style_key)
+    coach_goals = ctx.get("coach_goals") or "(none set)"
 
     # Explicit allowed number bank so the model can only quote these
     number_bank = (
         f"trend_lb={_r(ctx.get('trend'), 1)}, "
         f"last_scale_lb={_r(ctx.get('latest_weight'), 1)}, "
+        f"last_bf_pct={_r(ctx.get('latest_body_fat'), 1)}, "
+        f"bf_trend_pct={_r(ctx.get('body_fat_trend'), 1)}, "
         f"lb_per_week={_r(ctx.get('rate_lb_per_week'), 2)}, "
         f"kcal_per_day={_r(ctx.get('kcal_per_day'), 0)}, "
         f"goal_lb={_r(ctx.get('goal_weight'), 0)}, "
@@ -342,6 +481,33 @@ def build_prompt(ctx: dict, style: str = "pep") -> str:
         f"start_scale_lb={_r(ctx.get('first_weight'), 1)}"
     )
 
+    output_shape = {
+        "pep": (
+            "TITLE: <max 8 words, punchy, accurate>\n"
+            "MSG: <2 short sentences, max 55 words; must agree with BRIEFING>\n"
+            "TOAST: <max 5 words>\n"
+            "BADGE: <2-4 words ALL CAPS>"
+        ),
+        "roast": (
+            "TITLE: <max 8 words, snarky but kind>\n"
+            "MSG: <2 sentences: roast then useful nudge; max 55 words; must agree with BRIEFING>\n"
+            "TOAST: <max 5 words>\n"
+            "BADGE: <2-4 words ALL CAPS>"
+        ),
+        "haiku": (
+            "TITLE: <max 6 words>\n"
+            "MSG: <exactly three short phrases separated by ' / '; haiku-ish; NO prose paragraphs>\n"
+            "TOAST: <max 4 words>\n"
+            "BADGE: <2-4 words ALL CAPS>"
+        ),
+        "brief": (
+            "TITLE: <≤6 words>\n"
+            "MSG: <exactly ONE sentence, ≤18 words>\n"
+            "TOAST: <≤3 words>\n"
+            "BADGE: <2-3 words ALL CAPS>"
+        ),
+    }[style_key]
+
     return f"""### Instruction:
 You write coach copy for τrend, a personal weight-trend tracker app.
 
@@ -352,12 +518,18 @@ How the app works (read carefully):
 - Negative rate + negative kcal = losing weight / deficit. That is consistent and good if intended.
 - NEVER say "despite a deficit" or "even though you have a deficit" about weight loss. Deficit explains the loss.
 - Do not call a ~1–2 lb/week loss "slow" — that is a fast/solid pace. Use the pace words from the briefing.
+- Scale body fat % (when present) is a second signal; photo appearance scores (1–10) are a third.
+- Honor the user's stated focus/goals when present (e.g. visible abs, general fitness, cut, recomp).
 
-Your job: rephrase the BRIEFING into the output format. Do not invent new numbers or medical claims.
-Voice: {style_guide}
+Your job: rephrase the BRIEFING into the output format for the chosen STYLE. Do not invent new numbers or medical claims.
+
+STYLE CONTRACT (mandatory — output must obviously match this style):
+{style_guide}
+
 Tone hint: {ctx.get('tone')}
 Mood bucket: {mood}
 Trend confidence: {ctx.get('confidence')}
+User focus/goals note: {coach_goals}
 
 BRIEFING (authoritative — paraphrase, don't contradict):
 {narrative}
@@ -365,14 +537,14 @@ BRIEFING (authoritative — paraphrase, don't contradict):
 Allowed numbers only (do not invent others):
 {number_bank}
 
-Weigh-in log (most recent last):
+Weigh-in log (most recent last; includes bf when logged):
 {recent}
 
+Photo rating history (most recent last; appearance 1–10 + visual BMI):
+{photos}
+
 Output EXACTLY four lines and stop:
-TITLE: <max 8 words, punchy, accurate>
-MSG: <2 short sentences, max 55 words; must agree with BRIEFING>
-TOAST: <max 5 words>
-BADGE: <2-4 words ALL CAPS>
+{output_shape}
 
 ### Response:
 TITLE:"""

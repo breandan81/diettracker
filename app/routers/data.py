@@ -19,6 +19,7 @@ from app.deps import get_current_user, get_user_session_or_ingest
 from app.export_import import build_export_zip, import_export_zip
 from app.models import IngestToken, Photo, User, UserSetting, Weight
 from app.services import (
+    coach_photo_history,
     get_user_settings,
     load_user_trend,
     photo_series,
@@ -66,6 +67,7 @@ class SettingsBody(BaseModel):
     sex: str | None = None
     age: int | None = None
     athlete: bool | None = None
+    coach_goals: str | None = None
 
 
 @router.put("/api/settings")
@@ -76,8 +78,12 @@ def settings_put(
 ):
     mapping = body.model_dump(exclude_unset=True)
     for k, v in mapping.items():
-        if v is None and k in ("goal_weight", "height_in", "sex", "age"):
+        if v is None and k in ("goal_weight", "height_in", "sex", "age", "coach_goals"):
             set_user_setting(db, user.id, k, "")
+        elif k == "coach_goals":
+            # Cap length; empty clears
+            text = str(v or "").strip()[:500]
+            set_user_setting(db, user.id, k, text)
         elif isinstance(v, bool):
             set_user_setting(db, user.id, k, "1" if v else "0")
         else:
@@ -765,8 +771,9 @@ def coach_post(
         )
 
     series, summ, half, sets = load_user_trend(db, user.id)
+    photos = coach_photo_history(db, user.id, limit=8)
     try:
-        coach = generate_pep_xai(series, summ, sets, style=style)
+        coach = generate_pep_xai(series, summ, sets, style=style, photos=photos)
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
 

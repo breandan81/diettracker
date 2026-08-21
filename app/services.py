@@ -30,6 +30,7 @@ DEFAULTS = {
     "sex": "",
     "age": "",
     "athlete": "0",
+    "coach_goals": "",
 }
 
 
@@ -54,6 +55,8 @@ def get_user_settings(db: Session, user_id: int) -> dict:
                 out[k] = None
     ath = str(out.get("athlete") or "0").lower()
     out["athlete"] = ath in ("1", "true", "yes", "on")
+    # Free-form coach context (keep as string; empty => "")
+    out["coach_goals"] = str(out.get("coach_goals") or "").strip()
     out["kcal_per_lb"] = KCAL_PER_LB
     return out
 
@@ -185,6 +188,34 @@ def photo_series(db: Session, user_id: int) -> list[dict]:
                 "appearance_score": r.appearance_score,
             }
         )
+    return out
+
+
+def coach_photo_history(db: Session, user_id: int, limit: int = 8) -> list[dict]:
+    """Last N analyzed photos for coach briefing (ratings + brief notes)."""
+    rows = db.scalars(
+        select(Photo)
+        .where(Photo.user_id == user_id)
+        .order_by(Photo.date.desc(), Photo.id.desc())
+    ).all()
+    out: list[dict] = []
+    for r in rows:
+        if r.appearance_score is None and r.bmi_point is None:
+            continue
+        out.append(
+            {
+                "id": r.id,
+                "date": r.date,
+                "appearance_score": r.appearance_score,
+                "appearance_justification": (r.appearance_justification or "").strip()[:180]
+                or None,
+                "bmi_point": r.bmi_point,
+                "confidence_overall": r.confidence_overall,
+            }
+        )
+        if len(out) >= limit:
+            break
+    out.reverse()  # chronological for the prompt
     return out
 
 
