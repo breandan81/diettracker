@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
 # Finish Linode setup after default Caddy "Hello from Caddy" page.
-# Replaces the :80 static site with TLS + basic_auth + reverse_proxy to τrend.
+# Replaces the :80 static site with TLS + reverse_proxy to τrend.
+# Optional closed-beta gate: set BETA_PASS in the environment (never commit it).
 #
-# Run interactively (needs your sudo password):
 #   cd ~/trend-multi && bash deploy/finish-setup.sh
+#   BETA_PASS='choose-a-gate-password' bash deploy/finish-setup.sh
 #
 set -euo pipefail
 cd "$(dirname "$0")/.."
 APP_DIR="$PWD"
-DOMAIN="tau.bposhaughnessy.com"
-BETA_USER="beta"
-# Optional gate password — pass BETA_PASS=... or use ./deploy/caddy-hash-password.sh
-BETA_HASH="${BETA_HASH:-}"
+DOMAIN="${DOMAIN:-tau.bposhaughnessy.com}"
+BETA_USER="${BETA_USER:-beta}"
 
 echo "==> apt packages"
 sudo apt-get update -y
@@ -56,10 +55,21 @@ systemctl is-active trend-multi
 curl -sS http://127.0.0.1:8511/api/health
 echo
 
-echo "==> Caddyfile for ${DOMAIN} (TLS + basic_auth + reverse_proxy)"
+BETA_HASH=""
+if [[ -n "${BETA_PASS:-}" ]]; then
+  if command -v caddy >/dev/null 2>&1; then
+    BETA_HASH=$(caddy hash-password --plaintext "$BETA_PASS")
+  else
+    BETA_HASH=$(.venv/bin/python -c "import bcrypt,sys; print(bcrypt.hashpw(sys.argv[1].encode()[:72], bcrypt.gensalt(14)).decode())" "$BETA_PASS")
+  fi
+  echo "==> Caddyfile for ${DOMAIN} (TLS + basic_auth + reverse_proxy)"
+else
+  echo "==> Caddyfile for ${DOMAIN} (TLS + reverse_proxy, no basic_auth)"
+  echo "    (set BETA_PASS=... to enable a closed-beta gate)"
+fi
+
 sudo mkdir -p /var/log/caddy
 sudo chown -R caddy:caddy /var/log/caddy
-# Use Python so '$' in the bcrypt hash is never expanded by bash
 export DOMAIN BETA_USER BETA_HASH
 sudo -E python3 - <<'PY'
 from pathlib import Path
@@ -67,15 +77,17 @@ import os
 
 domain = os.environ["DOMAIN"]
 user = os.environ["BETA_USER"]
-h = os.environ["BETA_HASH"]
-# No file log — avoids permission fights; use journalctl -u caddy instead
-text = f"""{domain} {{
-	encode gzip
-
+h = (os.environ.get("BETA_HASH") or "").strip()
+auth = ""
+if h:
+    auth = f"""
 	basic_auth {{
 		{user} {h}
 	}}
-
+"""
+text = f"""{domain} {{
+	encode gzip
+{auth}
 	reverse_proxy 127.0.0.1:8511
 
 	header {{
@@ -105,5 +117,7 @@ curl -sS "https://${DOMAIN}/api/health" || true
 echo
 echo "Done."
 echo "  Open:  https://${DOMAIN}"
-echo "  Gate:  ${BETA_USER} / (from BETA_PASS env)"
-echo "  Then use τrend login (signup needs SMTP — see deploy/SMTP.md)"
+if [[ -n "${BETA_PASS:-}" ]]; then
+  echo "  Gate user: ${BETA_USER}  (password from BETA_PASS env — not printed)"
+fi
+echo "  App login: email signup (SMTP) — see deploy/SMTP.md"

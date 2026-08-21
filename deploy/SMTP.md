@@ -87,11 +87,10 @@ You want `"smtp_configured": true`.
 ### 5. End-to-end test
 
 1. Open https://tau.bposhaughnessy.com  
-2. Pass the Caddy gate: user `beta` / your shared password  
-3. **Create account** with a real inbox you can open  
-4. Check email for “Verify your τrend account”  
-5. Click the link → should land on login with “Email verified”  
-6. Sign in  
+2. **Create account** with a real inbox you can open  
+3. Check email for the verification message  
+4. Click the link → should land on login with “Email verified”  
+5. Sign in  
 
 If mail never arrives: spam folder, wait a minute, check logs:
 
