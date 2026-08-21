@@ -368,7 +368,7 @@ def build_context(
 
     if coach_goals:
         narrative.append(
-            f"User's stated focus/goals for the coach (honor this): {coach_goals}"
+            f"USER FOCUS (must reference in TITLE and/or MSG): {coach_goals}"
         )
     else:
         narrative.append(
@@ -519,7 +519,8 @@ How the app works (read carefully):
 - NEVER say "despite a deficit" or "even though you have a deficit" about weight loss. Deficit explains the loss.
 - Do not call a ~1–2 lb/week loss "slow" — that is a fast/solid pace. Use the pace words from the briefing.
 - Scale body fat % (when present) is a second signal; photo appearance scores (1–10) are a third.
-- Honor the user's stated focus/goals when present (e.g. visible abs, general fitness, cut, recomp).
+- When the user set a focus/goals note, you MUST weave it into TITLE and/or MSG in plain words
+  (e.g. if they wrote "visible abs", say abs / midsection / definition — do not ignore the note).
 
 Your job: rephrase the BRIEFING into the output format for the chosen STYLE. Do not invent new numbers or medical claims.
 
@@ -529,7 +530,7 @@ STYLE CONTRACT (mandatory — output must obviously match this style):
 Tone hint: {ctx.get('tone')}
 Mood bucket: {mood}
 Trend confidence: {ctx.get('confidence')}
-User focus/goals note: {coach_goals}
+User focus/goals note (REQUIRED to reference when not "(none set)"): {coach_goals}
 
 BRIEFING (authoritative — paraphrase, don't contradict):
 {narrative}

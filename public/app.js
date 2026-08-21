@@ -326,6 +326,11 @@
       const bits = [];
       if (aiCoach.style) bits.push(aiCoach.style);
       if (aiCoach.model) bits.push(String(aiCoach.model).replace(/^koboldcpp\//, ""));
+      const focus =
+        (aiCoach.context && aiCoach.context.coach_goals) ||
+        settings.coach_goals ||
+        "";
+      if (focus) bits.push("focus: " + String(focus).slice(0, 60));
       if (aiCoach.generated_at) {
         bits.push(String(aiCoach.generated_at).replace("T", " ").replace("+00:00", "Z"));
       }
@@ -1203,6 +1208,7 @@
       athlete: !!$("#set-athlete")?.checked,
       coach_goals: coachGoalsRaw || null,
     };
+    const msg = $("#settings-msg");
     try {
       const data = await api("/api/settings", {
         method: "PUT",
@@ -1210,8 +1216,23 @@
       });
       applyState(data);
       settings = data.settings || settings;
+      renderSettings();
+      if (msg) {
+        const focus = (settings.coach_goals || "").trim();
+        msg.textContent = focus
+          ? `Saved — coach focus: “${focus.slice(0, 80)}”`
+          : "Saved.";
+        msg.className = "hint";
+        msg.hidden = false;
+      }
     } catch (e) {
-      alert(e.message);
+      if (msg) {
+        msg.textContent = e.message || "Save failed";
+        msg.className = "hint err";
+        msg.hidden = false;
+      } else {
+        alert(e.message);
+      }
     }
   });
 

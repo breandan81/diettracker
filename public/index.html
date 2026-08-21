@@ -230,7 +230,7 @@
           <label>
             <span>Coach goals / focus (optional)</span>
             <textarea id="set-coach-goals" rows="2" maxlength="500" placeholder="e.g. general fitness · visible abs · recomp while lifting · cut for summer"></textarea>
-            <span class="field-hint">Free-form note the pep/roast/haiku coach will keep in mind (with your weight, BF, and photo ratings).</span>
+            <span class="field-hint">Saved with Apply. Pep/roast/haiku/brief will reference this (plus weight, BF, photo ratings).</span>
           </label>
           <div class="height-row">
             <span class="height-label">Height (BMI + Renpho profile)</span>
@@ -267,7 +267,10 @@
             </label>
             <span class="field-hint">Height + sex + age are pushed to the ESP32 → scale so on-device body fat can run. ESP polls <code>/api/scale-profile</code> with your ingest token.</span>
           </div>
-          <button type="submit" class="btn">Apply</button>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <button type="submit" class="btn">Apply</button>
+            <span class="hint" id="settings-msg" hidden></span>
+          </div>
         </form>
         <div class="math-box" style="margin-top:14px;">
           <strong>ESP32 ingest tokens</strong>
@@ -468,7 +471,7 @@
   </dialog>
 
   <script src="/bf_axis.js?v=27"></script>
-  <script src="/app.js?v=33"></script>
+  <script src="/app.js?v=34"></script>
   <script src="/photos-ui.js?v=31"></script>
 </body>
 </html>

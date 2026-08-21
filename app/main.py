@@ -127,7 +127,10 @@ if settings.public_dir.is_dir():
     def index(request: Request):
         if not request.session.get("user_id"):
             return RedirectResponse("/login.html")
-        return FileResponse(settings.public_dir / "index.html")
+        return FileResponse(
+            settings.public_dir / "index.html",
+            headers={"Cache-Control": "no-cache, must-revalidate"},
+        )
 
     @app.get("/login.html")
     def login_page():
@@ -172,18 +175,20 @@ if settings.public_dir.is_dir():
     def apple_touch():
         return FileResponse(settings.public_dir / "apple-touch-icon.png")
 
+    _no_cache = {"Cache-Control": "no-cache, must-revalidate"}
+
     @app.get("/style.css")
     def style_css():
-        return FileResponse(settings.public_dir / "style.css")
+        return FileResponse(settings.public_dir / "style.css", headers=_no_cache)
 
     @app.get("/app.js")
     def app_js():
-        return FileResponse(settings.public_dir / "app.js")
+        return FileResponse(settings.public_dir / "app.js", headers=_no_cache)
 
     @app.get("/bf_axis.js")
     def bf_axis_js():
-        return FileResponse(settings.public_dir / "bf_axis.js")
+        return FileResponse(settings.public_dir / "bf_axis.js", headers=_no_cache)
 
     @app.get("/photos-ui.js")
     def photos_ui_js():
-        return FileResponse(settings.public_dir / "photos-ui.js")
+        return FileResponse(settings.public_dir / "photos-ui.js", headers=_no_cache)
