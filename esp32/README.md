@@ -53,10 +53,26 @@ arduino-cli compile --fqbn "$FQBN" renpho_to_diettracker
 arduino-cli upload -p /dev/ttyACM0 --fqbn "$FQBN" renpho_to_diettracker
 ```
 
-7. Open Serial Monitor @ **115200** with **DTR/RTS off** (otherwise the C3 keeps resetting / WiFi comes up before BLE looks wrong):
+7. Open Serial Monitor @ **115200** with **DTR/RTS off** (otherwise the C3 keeps resetting / WiFi comes up before BLE looks wrong).
+
+Live only:
 
 ```bash
 arduino-cli monitor -p /dev/ttyACM0 -c baudrate=115200,dtr=off,rts=off
+```
+
+**Live + log to file** (recommended when diagnosing missed posts — timestamps, appends to `esp32/logs/serial-YYYYMMDD.log`):
+
+```bash
+cd renpho_to_diettracker
+./serial-log.sh                 # auto-picks ttyACM0 or ttyUSB0
+# PORT=/dev/ttyUSB0 ./serial-log.sh
+```
+
+Ctrl-C stops the monitor; the log file is kept. Grep later:
+
+```bash
+grep -E 'http|armed|cooldown|fail|POST|reject' ../logs/serial-$(date +%Y%m%d).log
 ```
 
 8. Step on the scale. Expect one POST per power-on. After success you should see
