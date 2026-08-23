@@ -124,6 +124,16 @@ static float kgToLb(float kg) {
   return kg * 2.2046226218f;
 }
 
+static void beepPostSuccess() {
+#ifdef BUZZER_PIN
+  tone(BUZZER_PIN, 2000, 70);
+  delay(80);
+  tone(BUZZER_PIN, 3000, 90);
+  delay(100);
+  noTone(BUZZER_PIN);
+#endif
+}
+
 static bool macAllowed(const NimBLEAddress& addr) {
   if (SCALE_MAC[0] == '\0') return true;
   String want = String(SCALE_MAC);
@@ -283,6 +293,7 @@ static void servicePendingPost() {
   uint32_t now = millis();
   if (postMeasurement(lb, bf)) {
     g_session.onPostSuccess(now);
+    beepPostSuccess();
     Serial.printf("[gatt] posted — sleeping %ds (one log per scale session)\n",
                   RESCAN_COOLDOWN_SECONDS);
   } else {
@@ -632,15 +643,11 @@ static bool connectAndSubscribe(const NimBLEAddress& addr) {
   g_session.onConnected(millis());
 
   delay(100);
-  // Proactive init helps some firmwares; 0x12/0x14 handlers cover the rest
+  // Proactive init helps some firmwares; 0x12/0x14 handlers cover the rest.
+  // NOTE: do NOT proactively send the user profile here — many QN firmwares
+  // want it as the reply to 0x21 pre-meas, and pre-arming g_sentProfile makes
+  // the notify handler skip that reply, causing the scale to abort the session.
   sendMeasurementInit();
-  // FFE0 / many QN units won't stream 0x10 weight frames until they have a profile.
-  // Send cached profile only — never HTTPS while connected.
-  delay(80);
-  if (g_profileReady && !g_sentProfile) {
-    g_sentProfile = true;
-    sendUserProfile();
-  }
 
   Serial.println("[gatt] subscribed — stand still for final reading");
   return true;
