@@ -691,6 +691,23 @@ textarea:focus {
   background: var(--panel-2);
 }
 
+.head-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Only present while a chart is actually zoomed — see chart_zoom.js */
+.zoom-reset {
+  border-color: var(--line);
+  background: var(--panel-2);
+}
+.zoom-reset:hover { color: var(--text); border-color: var(--accent); }
+.zoom-reset[hidden] { display: none; }
+
+.zoom-hint { color: var(--muted); }
+
 .chart-wrap {
   position: relative;
   height: 320px;

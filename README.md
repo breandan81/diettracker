@@ -77,6 +77,7 @@ SQLite DB: `data/weights.db` · photos: `data/photos/` (both under gitignored `d
 
 ```bash
 node test/test_bf_axis.js                          # BF chart axis bands
+node test/test_chart_zoom.js                       # chart zoom gestures + reset button
 make -C esp32/renpho_to_diettracker test           # ScaleSession one-shot / cooldown
 ```
 

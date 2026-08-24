@@ -14,7 +14,9 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-  <link rel="stylesheet" href="/style.css?v=32" />
+  <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js"></script>
+  <link rel="stylesheet" href="/style.css?v=35" />
 </head>
 <body class="mood-idle" id="body-mood">
   <div id="fx-layer" aria-hidden="true"></div>
@@ -189,29 +191,35 @@
     <section class="panel">
       <div class="panel-head">
         <h2>Trend chart</h2>
-        <div class="range-tabs" id="range-tabs">
-          <button type="button" data-range="30" class="tab">30d</button>
-          <button type="button" data-range="90" class="tab active">90d</button>
-          <button type="button" data-range="180" class="tab">180d</button>
-          <button type="button" data-range="365" class="tab">1y</button>
-          <button type="button" data-range="all" class="tab">all</button>
+        <div class="head-controls">
+          <div class="range-tabs" id="range-tabs">
+            <button type="button" data-range="30" class="tab">30d</button>
+            <button type="button" data-range="90" class="tab active">90d</button>
+            <button type="button" data-range="180" class="tab">180d</button>
+            <button type="button" data-range="365" class="tab">1y</button>
+            <button type="button" data-range="all" class="tab">all</button>
+          </div>
+          <button type="button" class="tab zoom-reset" id="chart-zoom-reset" hidden>reset zoom</button>
         </div>
       </div>
       <div class="chart-wrap">
         <canvas id="chart" height="120"></canvas>
       </div>
-      <p class="hint">Weight (left axis) and body fat % (right axis) when the scale sends BF. Lines are time-based EMAs. <span id="chart-bf-hint"></span></p>
+      <p class="hint">Weight (left axis) and body fat % (right axis) when the scale sends BF. Lines are time-based EMAs. <span id="chart-bf-hint"></span> <span class="zoom-hint">Drag a box to zoom, shift-drag to pan, ctrl-scroll or pinch to scale.</span></p>
     </section>
 
     <section class="panel" id="panel-visual-ratings" hidden>
       <div class="panel-head">
         <h2>Visual ratings</h2>
-        <span class="pill" id="xai-pill" title="xAI vision">Vision …</span>
+        <div class="head-controls">
+          <span class="pill" id="xai-pill" title="xAI vision">Vision …</span>
+          <button type="button" class="tab zoom-reset" id="chart-visual-zoom-reset" hidden>reset zoom</button>
+        </div>
       </div>
       <div class="chart-wrap">
         <canvas id="chart-visual" height="120"></canvas>
       </div>
-      <p class="hint">Grok appearance (1–10) and visual BMI from photos, plus <strong>Scale BMI</strong> at each weigh-in (needs height in settings). Upload in the <button type="button" class="linkish jump-photos">Photos</button> view.</p>
+      <p class="hint">Grok appearance (1–10) and visual BMI from photos, plus <strong>Scale BMI</strong> at each weigh-in (needs height in settings). Upload in the <button type="button" class="linkish jump-photos">Photos</button> view. <span class="zoom-hint">Drag a box to zoom, shift-drag to pan, ctrl-scroll or pinch to scale.</span></p>
     </section>
 
     <section class="two-col">
@@ -471,7 +479,8 @@
   </dialog>
 
   <script src="/bf_axis.js?v=27"></script>
-  <script src="/app.js?v=34"></script>
-  <script src="/photos-ui.js?v=31"></script>
+  <script src="/chart_zoom.js?v=35"></script>
+  <script src="/app.js?v=35"></script>
+  <script src="/photos-ui.js?v=35"></script>
 </body>
 </html>

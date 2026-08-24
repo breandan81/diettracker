@@ -8,6 +8,7 @@
   let settings = {};
   let range = "90";
   let chart;
+  let chartZoomUi = null;
   let lastMood = "idle";
   let coachStyle = localStorage.getItem("hd_coach_style") || "pep";
   let aiCoach = null; // last LLM coach payload
@@ -972,6 +973,23 @@
     return all.filter((e) => new Date(e.logged_at || e.date + "T12:00:00") >= start);
   }
 
+  // The BF% axis is a fixed lean→obese reference band (see bf_axis.js), so it
+  // stays put while weight and time zoom freely.
+  function bfZoomOptions(bfAxis) {
+    if (typeof HdChartZoom === "undefined") return undefined;
+    return HdChartZoom.zoomOptions({
+      mode: "xy",
+      limits: { yBf: HdChartZoom.frozenAxis(bfAxis.min, bfAxis.max) },
+      onChange: () => chartZoomUi?.sync(),
+    });
+  }
+
+  function applyBfZoomLimits(c, bfAxis) {
+    const zoom = c.options?.plugins?.zoom;
+    if (!zoom?.limits || typeof HdChartZoom === "undefined") return;
+    zoom.limits.yBf = HdChartZoom.frozenAxis(bfAxis.min, bfAxis.max);
+  }
+
   function renderChart() {
     const ctx = $("#chart");
     if (!ctx || typeof Chart === "undefined") return;
@@ -1078,7 +1096,9 @@
       chart.options.scales.yBf.display = showBf;
       chart.options.scales.yBf.min = bfAxis.min;
       chart.options.scales.yBf.max = bfAxis.max;
+      applyBfZoomLimits(chart, bfAxis);
       chart.update("none");
+      chartZoomUi?.sync();
       return;
     }
 
@@ -1109,6 +1129,7 @@
               },
             },
           },
+          zoom: bfZoomOptions(bfAxis),
         },
         scales: {
           x: {
@@ -1147,8 +1168,13 @@
             },
           },
         },
+        onResize: () => chartZoomUi?.sync(),
       },
     });
+
+    if (!chartZoomUi && typeof HdChartZoom !== "undefined") {
+      chartZoomUi = HdChartZoom.wireResetButton($("#chart-zoom-reset"), () => chart);
+    }
   }
 
   // --- events ---
@@ -1308,6 +1334,8 @@
       $$("#range-tabs .tab").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       range = btn.dataset.range;
+      // A new time window is a fresh view — drop any manual zoom with it.
+      chart?.resetZoom?.("none");
       renderChart();
     });
   });

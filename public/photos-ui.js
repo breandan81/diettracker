@@ -6,6 +6,7 @@
   let photos = [];
   let photoSeries = [];
   let visualChart = null;
+  let visualZoomUi = null;
   let activePhotoId = null;
   let weightSeries = []; // [{date, weight|trend}]
   let heightIn = null;
@@ -244,6 +245,7 @@
     if (visualChart) {
       visualChart.data.datasets = datasets;
       visualChart.update("none");
+      visualZoomUi?.sync();
       return;
     }
 
@@ -262,6 +264,15 @@
               boxWidth: 12,
             },
           },
+          // Appearance is a fixed 1–10 rating scale, so only time and BMI zoom.
+          zoom:
+            typeof HdChartZoom === "undefined"
+              ? undefined
+              : HdChartZoom.zoomOptions({
+                  mode: "xy",
+                  limits: { yScore: HdChartZoom.frozenAxis(1, 10) },
+                  onChange: () => visualZoomUi?.sync(),
+                }),
         },
         scales: {
           x: {
@@ -285,8 +296,16 @@
             ticks: { color: "#cc66cc" },
           },
         },
+        onResize: () => visualZoomUi?.sync(),
       },
     });
+
+    if (!visualZoomUi && typeof HdChartZoom !== "undefined") {
+      visualZoomUi = HdChartZoom.wireResetButton(
+        $("#chart-visual-zoom-reset"),
+        () => visualChart
+      );
+    }
   }
 
   function showProjection(p) {
