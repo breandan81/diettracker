@@ -787,6 +787,7 @@ static bool ensureWifi() {
 
 void setup() {
   Serial.begin(SERIAL_BAUD);
+  Serial.setTxTimeoutMs(0);   // don't block when no host is reading the CDC port
   delay(200);
   Serial.println();
   Serial.println(F("=== Renpho → τrend (ESP32) ==="));
