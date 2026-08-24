@@ -973,21 +973,9 @@
     return all.filter((e) => new Date(e.logged_at || e.date + "T12:00:00") >= start);
   }
 
-  // The BF% axis is a fixed lean→obese reference band (see bf_axis.js), so it
-  // stays put while weight and time zoom freely.
-  function bfZoomOptions(bfAxis) {
+  function trendZoomOptions() {
     if (typeof HdChartZoom === "undefined") return undefined;
-    return HdChartZoom.zoomOptions({
-      mode: "xy",
-      limits: { yBf: HdChartZoom.frozenAxis(bfAxis.min, bfAxis.max) },
-      onChange: () => chartZoomUi?.sync(),
-    });
-  }
-
-  function applyBfZoomLimits(c, bfAxis) {
-    const zoom = c.options?.plugins?.zoom;
-    if (!zoom?.limits || typeof HdChartZoom === "undefined") return;
-    zoom.limits.yBf = HdChartZoom.frozenAxis(bfAxis.min, bfAxis.max);
+    return HdChartZoom.zoomOptions({ mode: "xy", onChange: () => chartZoomUi?.sync() });
   }
 
   function renderChart() {
@@ -1094,9 +1082,13 @@
     if (chart) {
       chart.data.datasets = datasets;
       chart.options.scales.yBf.display = showBf;
-      chart.options.scales.yBf.min = bfAxis.min;
-      chart.options.scales.yBf.max = bfAxis.max;
-      applyBfZoomLimits(chart, bfAxis);
+      // The band is the default view, not a cage — leave a manual zoom alone.
+      // Re-applying it here would also desync the plugin's saved "original"
+      // bounds, so reset would no longer land where the user started.
+      if (!chart.isZoomedOrPanned?.()) {
+        chart.options.scales.yBf.min = bfAxis.min;
+        chart.options.scales.yBf.max = bfAxis.max;
+      }
       chart.update("none");
       chartZoomUi?.sync();
       return;
@@ -1129,7 +1121,7 @@
               },
             },
           },
-          zoom: bfZoomOptions(bfAxis),
+          zoom: trendZoomOptions(),
         },
         scales: {
           x: {

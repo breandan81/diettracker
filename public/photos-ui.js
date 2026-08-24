@@ -264,13 +264,11 @@
               boxWidth: 12,
             },
           },
-          // Appearance is a fixed 1–10 rating scale, so only time and BMI zoom.
           zoom:
             typeof HdChartZoom === "undefined"
               ? undefined
               : HdChartZoom.zoomOptions({
                   mode: "xy",
-                  limits: { yScore: HdChartZoom.frozenAxis(1, 10) },
                   onChange: () => visualZoomUi?.sync(),
                 }),
         },

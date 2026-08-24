@@ -5,7 +5,12 @@
  */
 "use strict";
 
-const { zoomOptions, frozenAxis, wireResetButton } = require("../public/chart_zoom.js");
+const {
+  zoomOptions,
+  wireResetButton,
+  installTouchContract,
+  requireTwoFingers,
+} = require("../public/chart_zoom.js");
 
 let failed = 0;
 let passed = 0;
@@ -19,22 +24,33 @@ function check(cond, msg) {
   }
 }
 
-// Drag-zoom and pan must be separated by a modifier, or a drag is ambiguous:
-// the plugin rejects drag-zoom while pan's modifier is held, and vice versa.
-{
-  const o = zoomOptions();
-  check(o.zoom.drag.enabled === true, "drag-zoom enabled by default");
-  check(o.pan.enabled === true, "pan enabled by default");
-  check(o.pan.modifierKey === "shift", `pan modifier shift, got ${o.pan.modifierKey}`);
-  check(o.zoom.drag.modifierKey == null, "bare drag is a zoom box (no modifier)");
-}
-
-// Plain wheel must keep scrolling the page — zoom only with ctrl held.
+// Scroll must zoom outright — a modifier here would be the old contract.
 {
   const o = zoomOptions();
   check(o.zoom.wheel.enabled === true, "wheel zoom enabled");
-  check(o.zoom.wheel.modifierKey === "ctrl", `wheel modifier ctrl, got ${o.zoom.wheel.modifierKey}`);
+  check(o.zoom.wheel.modifierKey == null, "bare scroll zooms (no modifier)");
   check(o.zoom.pinch.enabled === true, "pinch enabled for touch");
+}
+
+// scaleMode is what makes a scroll over an axis zoom only that axis: the plugin
+// picks the scale under the pointer, and falls back to `mode` in the plot area.
+{
+  const o = zoomOptions();
+  check(o.zoom.scaleMode === "xy", `zoom.scaleMode xy, got ${o.zoom.scaleMode}`);
+  check(o.pan.scaleMode === "xy", `pan.scaleMode xy, got ${o.pan.scaleMode}`);
+  const x = zoomOptions({ mode: "x" });
+  check(x.zoom.scaleMode === "x" && x.pan.scaleMode === "x", "scaleMode tracks mode");
+}
+
+// Bare drag pans; the zoom box moves to shift. The plugin disambiguates purely
+// by modifier, so pan must have none and drag must have one — never both, never
+// neither, or a single drag fires both handlers.
+{
+  const o = zoomOptions();
+  check(o.pan.enabled === true, "pan enabled");
+  check(o.pan.modifierKey == null, "bare drag pans (no modifier)");
+  check(o.zoom.drag.enabled === true, "box zoom still available");
+  check(o.zoom.drag.modifierKey === "shift", `box zoom on shift, got ${o.zoom.drag.modifierKey}`);
 }
 
 // Mode propagates to both zoom and pan, defaulting to xy.
@@ -44,43 +60,93 @@ function check(cond, msg) {
   check(x.zoom.mode === "x" && x.pan.mode === "x", "explicit mode reaches zoom and pan");
 }
 
-// limits are only emitted when supplied, so charts without a frozen axis stay clean.
+// limits are only emitted when supplied — no chart pins an axis today.
 {
   check(zoomOptions().limits === undefined, "no limits key without opts.limits");
-  const lim = { yBf: frozenAxis(6, 35) };
-  check(zoomOptions({ limits: lim }).limits === lim, "limits passed through");
-}
-
-// A frozen axis pins an exact span: minRange equal to the full span leaves no
-// room to zoom in, and min/max leave none to zoom out.
-{
-  const f = frozenAxis(6, 35);
-  check(f.min === 6 && f.max === 35, `frozen bounds 6..35, got ${f.min}..${f.max}`);
-  check(f.minRange === 29, `frozen minRange 29, got ${f.minRange}`);
-  const unit = frozenAxis(1, 10);
-  check(unit.minRange === 9, `1..10 minRange 9, got ${unit.minRange}`);
+  const lim = { yBf: { min: 6, max: 35 } };
+  check(zoomOptions({ limits: lim }).limits === lim, "limits passed through when asked for");
 }
 
 // onChange must land on ALL FOUR plugin callbacks. onZoomComplete alone is not
 // enough: the programmatic zoom API only fires onZoom, and the wheel path
 // debounces onZoomComplete by 250ms — either gap leaves the reset button stale.
 {
-  const hooks = ["onZoom", "onZoomComplete"];
+  const zoomHooks = ["onZoom", "onZoomComplete"];
   const panHooks = ["onPan", "onPanComplete"];
   let hits = 0;
   const o = zoomOptions({ onChange: () => hits++ });
 
-  hooks.forEach((h) => check(typeof o.zoom[h] === "function", `zoom.${h} wired`));
+  zoomHooks.forEach((h) => check(typeof o.zoom[h] === "function", `zoom.${h} wired`));
   panHooks.forEach((h) => check(typeof o.pan[h] === "function", `pan.${h} wired`));
 
-  hooks.forEach((h) => o.zoom[h]());
+  zoomHooks.forEach((h) => o.zoom[h]());
   panHooks.forEach((h) => o.pan[h]());
   check(hits === 4, `every callback reaches onChange, got ${hits} of 4`);
 
   const bare = zoomOptions();
-  hooks.forEach((h) => bare.zoom[h]());
+  zoomHooks.forEach((h) => bare.zoom[h]());
   panHooks.forEach((h) => bare.pan[h]());
   check(true, "callbacks are safe no-ops without onChange");
+}
+
+// --- the two-finger rule ---
+
+// One finger belongs to the page, two to the chart. A mouse only ever has one
+// pointer, so it must never be caught by the finger count.
+{
+  const touch = (n) => ({ event: { pointerType: "touch", pointers: new Array(n).fill(0) } });
+  check(requireTwoFingers(touch(1)) === false, "one finger is rejected — page keeps scrolling");
+  check(requireTwoFingers(touch(2)) === true, "two fingers pan");
+  check(requireTwoFingers(touch(3)) === true, "three fingers pan");
+
+  check(requireTwoFingers({ event: { pointerType: "mouse", pointers: [0] } }) === true, "mouse drag pans");
+  check(requireTwoFingers({ event: { pointerType: "pen", pointers: [0] } }) === true, "pen drag pans");
+  // Defensive: the plugin hands us whatever Hammer produced.
+  check(requireTwoFingers({ event: { pointerType: "touch" } }) === false, "touch with no pointer list counts as one");
+  check(requireTwoFingers({}) === true, "missing event does not block a pan");
+  check(requireTwoFingers() === true, "missing arg does not block a pan");
+}
+
+// zoomOptions must actually install the rule, not just export it.
+{
+  check(zoomOptions().pan.onPanStart === requireTwoFingers, "onPanStart enforces the finger count");
+}
+
+// The Hammer patch: Pan must accept any pointer count (its default of exactly
+// one makes a two-finger drag unrecognizable) and the Manager must not let
+// Hammer compute touchAction:none, which would eat one-finger page scrolling.
+{
+  const seen = { pan: null, manager: null };
+  function FakePan(options) { seen.pan = options; }
+  function FakeManager(element, options) { seen.manager = options; }
+  const Hammer = { Pan: FakePan, Manager: FakeManager };
+
+  check(installTouchContract(Hammer) === true, "patch installs on a well-formed Hammer");
+  check(Hammer.Pan !== FakePan, "Pan was wrapped");
+  check(Hammer.Manager !== FakeManager, "Manager was wrapped");
+
+  // Mimic the plugin's own construction calls.
+  new Hammer.Pan({ threshold: 10, enable: () => true });
+  check(seen.pan.pointers === 0, `Pan gets pointers:0 (any count), got ${seen.pan && seen.pan.pointers}`);
+  check(seen.pan.threshold === 10, "plugin's own Pan options survive the wrap");
+  check(typeof seen.pan.enable === "function", "plugin's enable callback survives the wrap");
+
+  new Hammer.Manager({});
+  check(seen.manager.touchAction === "pan-y", `Manager gets touchAction pan-y, got ${seen.manager && seen.manager.touchAction}`);
+
+  // Idempotent: a second install must not wrap the wrapper.
+  const wrappedPan = Hammer.Pan;
+  check(installTouchContract(Hammer) === true, "second install reports success");
+  check(Hammer.Pan === wrappedPan, "second install does not double-wrap");
+}
+
+// A Hammer that is absent or shaped differently (version bump) must degrade to
+// a no-op rather than throwing on page load.
+{
+  check(installTouchContract(null) === false, "no Hammer → no patch, no throw");
+  check(installTouchContract(undefined) === false, "undefined Hammer → no patch");
+  check(installTouchContract({}) === false, "Hammer without Pan/Manager → no patch");
+  check(installTouchContract({ Pan: 1, Manager: 2 }) === false, "non-callable Pan/Manager → no patch");
 }
 
 // --- wireResetButton, against a minimal fake button/chart ---
