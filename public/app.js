@@ -803,6 +803,43 @@
     return band(30, 40, 75);
   }
 
+  /**
+   * Body-fat verdict bar — the fat% twin of the BMI bar.
+   *
+   * The cutoffs are sex- and age-specific (see bf_axis.js), so unlike BMI there
+   * is nothing to draw until the profile says who this is: 26% is healthy for a
+   * 44yo woman and overfat for a 44yo man.
+   */
+  function renderBfBands(bf) {
+    const bar = $("#bf-bar");
+    const marker = $("#bf-marker");
+    const rangeEl = $("#s-bf-range");
+    const valueEl = $("#s-bf");
+    if (!bar || !rangeEl) return;
+
+    const cat =
+      typeof HdBfAxis === "undefined"
+        ? null
+        : HdBfAxis.bodyFatCategory(settings.sex, settings.age, bf);
+
+    if (!cat) {
+      bar.hidden = true;
+      rangeEl.textContent =
+        bf != null && !settings.sex ? "set sex in settings for ranges" : "";
+      if (valueEl) valueEl.className = "stat-value";
+      return;
+    }
+
+    bar.hidden = false;
+    if (valueEl) valueEl.className = "stat-value bf-" + cat.key;
+    cat.bands.forEach((b) => {
+      const seg = $("#bf-seg-" + b.key);
+      if (seg) seg.title = b.title;
+    });
+    rangeEl.textContent = `${cat.label} · healthy ${cat.healthy.low}–${cat.healthy.high}% for ${cat.sexLabel} ${cat.bracket}`;
+    if (marker) marker.style.left = cat.markerPct + "%";
+  }
+
   function renderStats() {
     const s = summary || {};
     $("#s-trend").textContent =
@@ -826,6 +863,7 @@
         bfEl.textContent = "—";
         bfSub.textContent = "from scale when available";
       }
+      renderBfBands(bf);
     }
 
     const rWeek = s.rate_lb_per_week;

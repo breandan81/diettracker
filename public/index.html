@@ -16,7 +16,7 @@
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js"></script>
-  <link rel="stylesheet" href="/style.css?v=35" />
+  <link rel="stylesheet" href="/style.css?v=36" />
 </head>
 <body class="mood-idle" id="body-mood">
   <div id="fx-layer" aria-hidden="true"></div>
@@ -142,21 +142,30 @@
         <div class="stat-value" id="s-kcal">—</div>
         <div class="stat-sub">kcal/day (from trend slope)</div>
       </div>
-      <div class="stat">
+      <div class="stat" id="stat-bf">
         <div class="stat-label">Body fat</div>
         <div class="stat-value" id="s-bf">—</div>
         <div class="stat-sub" id="s-bf-sub">from scale when available</div>
+        <div class="range-bar" id="bf-bar" hidden>
+          <!-- Segment titles are filled in by app.js: the cutoffs move with sex and age. -->
+          <div class="range-seg under" id="bf-seg-underfat"></div>
+          <div class="range-seg normal" id="bf-seg-healthy"></div>
+          <div class="range-seg over" id="bf-seg-overfat"></div>
+          <div class="range-seg obese" id="bf-seg-obese"></div>
+          <div class="range-marker" id="bf-marker"></div>
+        </div>
+        <div class="stat-sub" id="s-bf-range"></div>
       </div>
       <div class="stat" id="stat-bmi">
         <div class="stat-label">BMI</div>
         <div class="stat-value" id="s-bmi">—</div>
         <div class="stat-sub" id="s-bmi-cat">set height in settings</div>
-        <div class="bmi-bar" id="bmi-bar" hidden>
-          <div class="bmi-seg under" title="Underweight &lt;18.5"></div>
-          <div class="bmi-seg normal" title="Normal 18.5–24.9"></div>
-          <div class="bmi-seg over" title="Overweight 25–29.9"></div>
-          <div class="bmi-seg obese" title="Obese ≥30"></div>
-          <div class="bmi-marker" id="bmi-marker"></div>
+        <div class="range-bar" id="bmi-bar" hidden>
+          <div class="range-seg under" title="Underweight &lt;18.5"></div>
+          <div class="range-seg normal" title="Normal 18.5–24.9"></div>
+          <div class="range-seg over" title="Overweight 25–29.9"></div>
+          <div class="range-seg obese" title="Obese ≥30"></div>
+          <div class="range-marker" id="bmi-marker"></div>
         </div>
         <div class="stat-sub" id="s-bmi-range"></div>
       </div>
@@ -478,9 +487,9 @@
     </form>
   </dialog>
 
-  <script src="/bf_axis.js?v=27"></script>
-  <script src="/chart_zoom.js?v=36"></script>
-  <script src="/app.js?v=36"></script>
-  <script src="/photos-ui.js?v=36"></script>
+  <script src="/bf_axis.js?v=37"></script>
+  <script src="/chart_zoom.js?v=37"></script>
+  <script src="/app.js?v=37"></script>
+  <script src="/photos-ui.js?v=37"></script>
 </body>
 </html>

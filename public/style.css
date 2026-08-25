@@ -164,17 +164,17 @@ main {
 }
 .stat-value.loss { color: var(--loss); }
 .stat-value.gain { color: var(--gain); }
-.stat-value.bmi-under { color: var(--accent); }
-.stat-value.bmi-normal { color: var(--loss); }
-.stat-value.bmi-over { color: var(--warn); }
-.stat-value.bmi-obese { color: var(--danger); }
+.stat-value.bmi-under, .stat-value.bf-underfat { color: var(--accent); }
+.stat-value.bmi-normal, .stat-value.bf-healthy { color: var(--loss); }
+.stat-value.bmi-over, .stat-value.bf-overfat { color: var(--warn); }
+.stat-value.bmi-obese, .stat-value.bf-obese { color: var(--danger); }
 .stat-sub {
   margin-top: 4px;
   font-size: 12px;
   color: var(--muted);
 }
 
-.bmi-bar {
+.range-bar {
   position: relative;
   display: flex;
   height: 8px;
@@ -183,12 +183,12 @@ main {
   margin-top: 10px;
   border: 1px solid var(--line);
 }
-.bmi-seg { flex: 1; }
-.bmi-seg.under { background: #5b9fd4; }
-.bmi-seg.normal { background: #7dd3a0; }
-.bmi-seg.over { background: #e0a85c; }
-.bmi-seg.obese { background: #e07070; }
-.bmi-marker {
+.range-seg { flex: 1; }
+.range-seg.under { background: #5b9fd4; }
+.range-seg.normal { background: #7dd3a0; }
+.range-seg.over { background: #e0a85c; }
+.range-seg.obese { background: #e07070; }
+.range-marker {
   position: absolute;
   top: -3px;
   bottom: -3px;
