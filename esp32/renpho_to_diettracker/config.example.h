@@ -52,4 +52,4 @@
 
 // Passive piezo buzzer, one leg to this GPIO, other to GND. Chirps once
 // on a successful POST so you know the weigh-in landed. Comment out to disable.
-#define BUZZER_PIN  3
+#define BUZZER_PIN  5
