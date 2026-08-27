@@ -136,14 +136,55 @@ static float kgToLb(float kg) {
 #define BEEP_MS      90
 #define BEEP_GAP_MS  70   // <50ms reads as one blip — the disc rings through it
 
+// Set to 0 for the plain two-pulse beep if the tune wears out its welcome.
+#define BEEP_MELODY  1
+
+// Octave 8 straddles the disc's 4kHz peak, so the tune is transposed up rather
+// than played where it sits on a keyboard — an octave lower is well off
+// resonance and those notes would nearly vanish. Even here the outer notes are
+// quieter than the middle; that is the disc, not the code.
+#define N_REST  0
+#define N_G7    3136
+#define N_A7    3520
+#define N_B7    3951
+#define N_C8    4186
+#define N_D8    4699
+#define N_E8    5274
+#define N_F8    5588
+#define N_G8    6272
+
+#define NOTE_GAP_MS  20   // articulation, so repeated pitches stay separate
+
+struct BeepNote {
+  uint16_t hz;
+  uint16_t ms;
+};
+
+// Kraftwerk, "Taschenrechner" (1981) — the main riff, from memory and
+// transposed up. Treat the intervals as a starting point rather than a
+// transcription: edit the table by ear, that is what it is here for.
+static const BeepNote MELODY[] = {
+  {N_C8, 110}, {N_C8, 110}, {N_E8, 110}, {N_D8, 110},
+  {N_C8, 110}, {N_A7, 220},
+  {N_REST, 70},
+  {N_C8, 110}, {N_D8, 110}, {N_E8, 110}, {N_G8, 260},
+};
+
 static void beepPostSuccess() {
 #ifdef BUZZER_PIN
   // tone() is non-blocking (it queues to a worker task), so each delay has to
-  // cover the pulse itself plus the silence we want after it.
+  // cover the note itself plus the silence we want after it.
+#if BEEP_MELODY
+  for (size_t i = 0; i < sizeof(MELODY) / sizeof(MELODY[0]); i++) {
+    if (MELODY[i].hz) tone(BUZZER_PIN, MELODY[i].hz, MELODY[i].ms);
+    delay(MELODY[i].ms + NOTE_GAP_MS);
+  }
+#else
   tone(BUZZER_PIN, BEEP_HZ, BEEP_MS);
   delay(BEEP_MS + BEEP_GAP_MS);
   tone(BUZZER_PIN, BEEP_HZ, BEEP_MS);
   delay(BEEP_MS + 10);
+#endif
   noTone(BUZZER_PIN);
 #endif
 }
