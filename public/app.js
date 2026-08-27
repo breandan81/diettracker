@@ -870,13 +870,29 @@
     const rateEl = $("#s-rate");
     rateEl.textContent = rWeek != null ? `${fmt(rWeek, 2)} lb/wk` : "—";
     rateEl.className = "stat-value " + signClass(rWeek);
-    // Flagged while the series is shorter than the rate lookback — the number
-    // is real but measured over a stub of a window, so say so rather than
-    // presenting it with the same confidence as a settled one.
-    $("#s-rate-day").textContent =
-      s.rate_lb_per_day != null
-        ? `${fmt(s.rate_lb_per_day, 3)} lb/day${s.rate_provisional ? " · provisional" : ""}`
-        : "— lb/day";
+    // A rate without its uncertainty invites reading noise as progress: over a
+    // short window the 95% band can straddle zero, and the honest reading is
+    // then "cannot tell yet" rather than whatever the point estimate says.
+    // provisional means only "too few points to fit a line" — see trend.py.
+    const rateSub = $("#s-rate-day");
+    if (s.rate_lb_per_day == null) {
+      rateSub.textContent = "— lb/day";
+      rateSub.title = "";
+    } else {
+      const se = s.rate_se_lb_per_day;
+      const band = se != null ? ` ±${fmt(1.96 * se * 7, 2)} lb/wk` : "";
+      rateSub.textContent =
+        `${fmt(s.rate_lb_per_day, 3)} lb/day${band}` +
+        (s.rate_provisional ? " · provisional" : "");
+      rateSub.title =
+        se != null
+          ? `95% confidence: ${fmt((rWeek - 1.96 * se * 7), 2)} to ` +
+            `${fmt((rWeek + 1.96 * se * 7), 2)} lb/wk` +
+            (s.rate_window_days != null
+              ? ` · fitted over ${fmt(s.rate_window_days, 0)} days`
+              : "")
+          : "not enough weigh-ins to estimate uncertainty";
+    }
 
     const kcal = s.kcal_per_day;
     const kEl = $("#s-kcal");

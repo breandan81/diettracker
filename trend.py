@@ -12,31 +12,38 @@ Body fat (when present) is smoothed with the same half-life.
 
     kcal/day ≈ rate_lb_per_day * 3500
 
-Rate is the trend line differenced over RATE_LOOKBACK_DAYS, interpolating
-the trend at the lookback instant since weigh-ins are irregular. The trend
-is already smoothed, so no second filter is applied to the slope — doing so
-only adds lag. When the series is shorter than the lookback the rate is
-measured over whatever span exists and flagged `rate_provisional`.
+Rate is a least-squares fit to the raw weigh-ins over a trailing window —
+not a slope of the trend line, which understates badly until the EMA settles.
+The window is RATE_WINDOW_DAYS, shorter when the series is young and wider
+when a gap would otherwise leave too few points to fit. `rate_se_lb_per_day`
+carries the standard error, so a young or sparse window reports a wide error
+bar rather than a falsely confident number.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from bisect import bisect_right
+from bisect import bisect_left
 from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional, Sequence, Tuple, Union
 
 KCAL_PER_LB = 3500.0
 DEFAULT_HALF_LIFE_DAYS = 7.0
 
-# Rate = how far the trend line moved over the last RATE_LOOKBACK_DAYS.
-# Note this is NOT a 7-day measurement: each trend endpoint is itself a
-# backward-weighted average with a ~10-day time constant, so the estimate is
-# effectively centred ~14 days back. That is the price of the smoothing, and
-# it is why nothing further is applied on top.
-RATE_LOOKBACK_DAYS = 7.0
-# Below this the trend has barely moved and the quotient blows up.
+# Rate = least squares on the RAW weigh-ins over a trailing window.
+#
+# Deliberately NOT derived from the trend line. The trend's lag grows from zero
+# to ~10 days while it settles, and differencing two points with different lags
+# understates the slope — 31% of truth at day 8, still 91% at day 28. OLS has
+# no warm-up: it is unbiased from the third weigh-in, and at matched delay it
+# is also less noisy.
+RATE_WINDOW_DAYS = 21.0
+# Widen through a gap until a line can be fitted, but do not reach back forever
+# after a long layoff — old points describe a different diet.
+RATE_MIN_POINTS = 3
+RATE_MAX_WINDOW_DAYS = 60.0
+# Below this the window is a sliver and the slope is meaningless.
 _MIN_RATE_SPAN_DAYS = 0.5
 
 DateTimeLike = Union[date, datetime, str]
@@ -109,6 +116,8 @@ class Point:
     rate_lb_per_week: Optional[float] = None
     kcal_per_day: Optional[float] = None
     rate_provisional: bool = False
+    rate_se_lb_per_day: Optional[float] = None
+    rate_window_days: Optional[float] = None
     gap_days: Optional[float] = None
     alpha: Optional[float] = None
 
@@ -130,33 +139,55 @@ class Point:
             "rate_lb_per_week": self.rate_lb_per_week,
             "kcal_per_day": self.kcal_per_day,
             "rate_provisional": self.rate_provisional,
+            "rate_se_lb_per_day": self.rate_se_lb_per_day,
+            "rate_window_days": self.rate_window_days,
             "gap_days": self.gap_days,
             "alpha": self.alpha,
         }
 
 
-def _trend_at(
-    times: Sequence[datetime], trends: Sequence[float], when: datetime
-) -> Optional[float]:
-    """Trend value at an arbitrary instant, linearly interpolated.
+def _ols(
+    times: Sequence[datetime], values: Sequence[float]
+) -> Tuple[float, Optional[float]]:
+    """Least-squares slope in units/day, with the standard error of that slope.
 
-    Weigh-ins are irregular, so the lookback instant rarely lands on one.
-    The trend is a continuous curve, so interpolating between the two
-    bracketing anchors is more faithful than snapping to the nearest.
-
-    Returns None when `when` predates the series — the caller then falls
-    back to the oldest anchor it has and flags the result provisional.
+    sigma comes from this fit's own residuals (df = n - 2) rather than a figure
+    pooled over the series: residuals about the TREND line would carry its
+    warm-up ramp, which is not measurement noise and would inflate every error
+    bar. Two points fit exactly, leaving no degrees of freedom and no error bar
+    — which is honest, and those windows are flagged provisional anyway.
     """
-    if not times or when < times[0]:
-        return None
-    i = bisect_right(times, when) - 1
-    if i >= len(times) - 1:
-        return trends[-1]
-    span = (times[i + 1] - times[i]).total_seconds()
-    if span <= 0:
-        return trends[i]
-    f = (when - times[i]).total_seconds() / span
-    return trends[i] + f * (trends[i + 1] - trends[i])
+    xs = [days_between_dt(times[0], t) for t in times]
+    n = len(xs)
+    mx = sum(xs) / n
+    my = sum(values) / n
+    sxx = sum((x - mx) ** 2 for x in xs)
+    if sxx <= 0:
+        return 0.0, None
+    slope = sum((x - mx) * (y - my) for x, y in zip(xs, values)) / sxx
+    if n < 3:
+        return slope, None
+    intercept = my - slope * mx
+    ss = sum((y - (slope * x + intercept)) ** 2 for x, y in zip(xs, values))
+    return slope, math.sqrt(max(ss, 0.0) / (n - 2) / sxx)
+
+
+def _rate_window(times: Sequence[datetime], i: int) -> int:
+    """First index of the regression window ending at `i`.
+
+    Normally the trailing RATE_WINDOW_DAYS. A gap can leave that window with
+    too few points to fit a line — weigh in today after three weeks off and it
+    holds exactly one — so it widens backwards until RATE_MIN_POINTS are in
+    hand, stopping at RATE_MAX_WINDOW_DAYS so a long layoff does not regress
+    today against a different era.
+    """
+    now = times[i]
+    j = bisect_left(times, now - timedelta(days=RATE_WINDOW_DAYS))
+    while i - j + 1 < RATE_MIN_POINTS and j > 0:
+        if days_between_dt(times[j - 1], now) > RATE_MAX_WINDOW_DAYS:
+            break
+        j -= 1
+    return j
 
 
 def compute_trend(
@@ -211,8 +242,6 @@ def compute_trend(
     prev_bf_trend: Optional[float] = None
     prev_at: Optional[datetime] = None
     ema: dict = {}  # anchor id -> filled Point fields
-    hist_times: List[datetime] = []  # anchor trend curve, for the rate lookback
-    hist_trends: List[float] = []
 
     for p in anchors:
         if prev_trend is None or prev_at is None:
@@ -240,37 +269,34 @@ def compute_trend(
             else:
                 p.body_fat_trend = prev_bf_trend
 
-            # Slope of the already-smoothed trend over the lookback window.
-            target = p.logged_at - timedelta(days=RATE_LOOKBACK_DAYS)
-            base = _trend_at(hist_times, hist_trends, target)
-            if base is None:
-                # Series younger than the lookback: use everything there is.
-                base, base_at = hist_trends[0], hist_times[0]
-                provisional = True
-            else:
-                base_at = target
-                provisional = False
-
-            span = days_between_dt(base_at, p.logged_at)
-            if span >= _MIN_RATE_SPAN_DAYS:
-                rate = (trend - base) / span
-            else:
-                rate = 0.0
-                provisional = True
-
-            p.rate_lb_per_day = rate
-            p.rate_lb_per_week = rate * 7.0
-            p.kcal_per_day = rate * KCAL_PER_LB
-            p.rate_provisional = provisional
+            pass  # rate is fitted below, once every trend is known
 
         prev_trend = p.trend
         if p.body_fat_trend is not None:
             prev_bf_trend = p.body_fat_trend
         prev_at = p.logged_at
-        hist_times.append(p.logged_at)
-        hist_trends.append(p.trend)
         if p.id is not None:
             ema[p.id] = p
+
+    # Rate: least squares on the raw weigh-ins (see RATE_WINDOW_DAYS).
+    times = [a.logged_at for a in anchors]
+
+    for i, p in enumerate(anchors):
+        j = _rate_window(times, i)
+        n = i - j + 1
+        span = days_between_dt(times[j], times[i])
+        if n >= 2 and span >= _MIN_RATE_SPAN_DAYS:
+            slope, se = _ols(times[j : i + 1], [a.weight for a in anchors[j : i + 1]])
+            p.rate_lb_per_day = slope
+            p.rate_se_lb_per_day = se
+            p.rate_provisional = n < RATE_MIN_POINTS
+        else:
+            p.rate_lb_per_day = 0.0
+            p.rate_se_lb_per_day = None
+            p.rate_provisional = True
+        p.rate_lb_per_week = p.rate_lb_per_day * 7.0
+        p.kcal_per_day = p.rate_lb_per_day * KCAL_PER_LB
+        p.rate_window_days = round(span, 4)
 
     # Copy EMA onto every sample (duplicates inherit their anchor's state)
     for p in pts:
@@ -284,6 +310,8 @@ def compute_trend(
         p.rate_lb_per_week = src.rate_lb_per_week
         p.kcal_per_day = src.kcal_per_day
         p.rate_provisional = src.rate_provisional
+        p.rate_se_lb_per_day = src.rate_se_lb_per_day
+        p.rate_window_days = src.rate_window_days
         if src is p:
             continue  # already filled as anchor
         p.gap_days = 0.0
@@ -306,6 +334,8 @@ def summary(points: Sequence[Point]) -> dict:
             "rate_lb_per_week": None,
             "kcal_per_day": None,
             "rate_provisional": True,
+            "rate_se_lb_per_day": None,
+            "rate_window_days": None,
             "half_life_days": None,
         }
     last = points[-1]
@@ -325,6 +355,8 @@ def summary(points: Sequence[Point]) -> dict:
         "rate_lb_per_week": last.rate_lb_per_week,
         "kcal_per_day": last.kcal_per_day,
         "rate_provisional": last.rate_provisional,
+        "rate_se_lb_per_day": last.rate_se_lb_per_day,
+        "rate_window_days": last.rate_window_days,
         "span_days": span_days,
         "net_trend_change": (
             (last.trend - first.trend)

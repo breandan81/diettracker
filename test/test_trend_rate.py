@@ -10,9 +10,12 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from trend import (  # noqa: E402
-    RATE_LOOKBACK_DAYS,
+    RATE_MAX_WINDOW_DAYS,
+    RATE_MIN_POINTS,
+    RATE_WINDOW_DAYS,
     _MIN_RATE_SPAN_DAYS,
-    _trend_at,
+    _ols,
+    _rate_window,
     compute_trend,
     summary,
 )
@@ -44,23 +47,48 @@ def series(weights, step_days=1.0, start=T0):
     ]
 
 
-# --- _trend_at ------------------------------------------------------------
+# --- _ols -----------------------------------------------------------------
 
-times = [T0, T0 + timedelta(days=2), T0 + timedelta(days=4)]
-trends = [200.0, 198.0, 196.0]
+def at(days):
+    return T0 + timedelta(days=days)
 
-check(_trend_at(times, trends, T0 + timedelta(days=1)) == 199.0, "interpolates midway")
-check(_trend_at(times, trends, T0 + timedelta(days=2)) == 198.0, "exact hit on an anchor")
-check(_trend_at(times, trends, T0 + timedelta(days=3)) == 197.0, "interpolates second span")
-check(_trend_at(times, trends, T0) == 200.0, "first anchor")
-check(_trend_at(times, trends, T0 - timedelta(days=1)) is None, "before the series -> None")
-check(_trend_at(times, trends, T0 + timedelta(days=9)) == 196.0, "past the end clamps to last")
-check(_trend_at([], [], T0) is None, "empty history -> None")
-# Two anchors at the same instant must not divide by zero. bisect lands past
-# both, so the later (most recent) trend wins — which is the right answer.
-check(_trend_at([T0, T0], [200.0, 199.0], T0) == 199.0, "zero-width span does not blow up")
-check(_trend_at([T0, T0, T0 + timedelta(days=2)], [200.0, 199.0, 197.0],
-                T0 + timedelta(days=1)) == 198.0, "interpolates past a zero-width span")
+
+slope, se = _ols([at(0), at(1), at(2)], [200.0, 199.0, 198.0])
+check(close(slope, -1.0), f"clean slope, got {slope}")
+check(se is not None and se < 1e-9, "perfect fit has no error")
+slope, se = _ols([at(0), at(0)], [200.0, 199.0])
+check(slope == 0.0 and se is None, "zero spread cannot define a slope")
+slope, se = _ols([at(0), at(2)], [200.0, 198.0])
+check(close(slope, -1.0) and se is None, "two points fit exactly, no df for an error bar")
+# Irregular spacing must not tilt the fit.
+slope, _se = _ols([at(0), at(0.5), at(7)], [200.0, 199.75, 196.5])
+check(close(slope, -0.5), f"irregular spacing fits correctly, got {slope}")
+
+
+# --- _rate_window: the gap-tolerance rule ---------------------------------
+
+# Dense daily data: window is exactly RATE_WINDOW_DAYS, nothing wider.
+dense = [at(i) for i in range(40)]
+j = _rate_window(dense, len(dense) - 1)
+span = (dense[-1] - dense[j]).total_seconds() / 86400
+check(span <= RATE_WINDOW_DAYS, f"dense window capped at {RATE_WINDOW_DAYS}d, got {span}")
+check(span >= RATE_WINDOW_DAYS - 1.01, f"dense window uses the full {RATE_WINDOW_DAYS}d, got {span}")
+
+# THE GAP CASE: today plus a cluster three weeks back. A fixed window would
+# hold one point; it must widen until a line can be fitted.
+gap = [at(0), at(1), at(2), at(30)]
+j = _rate_window(gap, 3)
+check(len(gap) - j >= RATE_MIN_POINTS, f"widens through a gap, got {len(gap)-j} points")
+
+# Only two points ever: use them, do not invent a third.
+j = _rate_window([at(0), at(30)], 1)
+check(j == 0, "two-point series uses both")
+
+# A long layoff must not regress today against a different era.
+stale = [at(0), at(1), at(2), at(400)]
+j = _rate_window(stale, 3)
+span = (stale[-1] - stale[j]).total_seconds() / 86400
+check(span <= RATE_MAX_WINDOW_DAYS, f"layoff capped at {RATE_MAX_WINDOW_DAYS}d, got {span}")
 
 
 # --- a steady decline recovers its own slope ------------------------------
@@ -85,31 +113,56 @@ up = compute_trend(series([200.0 + 0.25 * i for i in range(60)]))
 check(up[-1].rate_lb_per_day > 0, "weight gain gives a positive rate")
 
 
-# --- the lookback window is honoured --------------------------------------
+# --- the fit matches a plain regression over the window -------------------
 pts = compute_trend(series([200.0 - 0.5 * i for i in range(40)]))
-by_time = {p.logged_at: p for p in pts}
 p_last = pts[-1]
-base = by_time[p_last.logged_at - timedelta(days=RATE_LOOKBACK_DAYS)]
-expected = (p_last.trend - base.trend) / RATE_LOOKBACK_DAYS
-check(
-    close(p_last.rate_lb_per_day, expected, 1e-9),
-    "rate equals (trend now - trend at lookback) / lookback",
-)
+inwin = [p for p in pts if (p_last.logged_at - p.logged_at).days <= RATE_WINDOW_DAYS]
+expected, _ = _ols([p.logged_at for p in inwin], [p.weight for p in inwin])
+check(close(p_last.rate_lb_per_day, expected, 1e-9), "rate is OLS over the window")
+check(p_last.rate_window_days <= RATE_WINDOW_DAYS + 1e-9, "window is reported and capped")
 
-# No second filter: the rate depends only on the two endpoints, so an identical
-# trend pair must give an identical rate regardless of the path between them.
+
+# --- no warm-up: unbiased from the very first days ------------------------
+# This is the whole reason for regressing raw weights instead of the trend.
+for n in (4, 8, 14, 21, 40, 70):
+    pts = compute_trend(series([200.0 - 0.4 * i for i in range(n)]))
+    got = pts[-1].rate_lb_per_day
+    check(close(got, -0.4, 1e-6), f"day {n} recovers -0.4 exactly, got {got:.4f}")
+
+
+# --- standard error -------------------------------------------------------
+import random  # noqa: E402
+
+random.seed(11)
+noisy = compute_trend(
+    series([200.0 - 0.3 * i + random.gauss(0, 1.0) for i in range(40)])
+)
+se_long = noisy[-1].rate_se_lb_per_day
+check(se_long is not None and se_long > 0, "noisy series reports a standard error")
+short_noisy = compute_trend(
+    series([200.0 - 0.3 * i + random.gauss(0, 1.0) for i in range(6)])
+)
 check(
-    close(
-        compute_trend(series([190.0] * 20))[-1].rate_lb_per_day, 0.0, 1e-9
-    ),
-    "no residual rate carried from earlier history",
+    short_noisy[-1].rate_se_lb_per_day > se_long,
+    "a shorter window reports a WIDER error bar",
+)
+clean = compute_trend(series([200.0 - 0.3 * i for i in range(40)]))
+check(
+    clean[-1].rate_se_lb_per_day is not None
+    and clean[-1].rate_se_lb_per_day < 1e-6,
+    "noise-free data has an essentially zero error bar",
 )
 
 
 # --- provisional flag -----------------------------------------------------
-short = compute_trend(series([200.0, 199.0, 198.0]))  # 2-day span < 7
-check(short[-1].rate_provisional is True, "series shorter than lookback is provisional")
-check(short[-1].rate_lb_per_day < 0, "short series still reports a direction")
+# Now means only "too few points to fit a line", not "biased".
+two = compute_trend(series([200.0, 199.0]))
+check(two[-1].rate_provisional is True, f"{RATE_MIN_POINTS - 1} points is provisional")
+check(close(two[-1].rate_lb_per_day, -1.0), "two points still give the secant slope")
+check(two[-1].rate_se_lb_per_day is None, "two points have no error bar to report")
+three = compute_trend(series([200.0, 199.0, 198.0]))
+check(three[-1].rate_provisional is False, f"{RATE_MIN_POINTS} points is enough to fit")
+check(close(three[-1].rate_lb_per_day, -1.0), "three points fit the line exactly")
 
 single = compute_trend(series([200.0]))
 check(single[0].rate_lb_per_day == 0.0, "one point has no slope")
@@ -119,7 +172,7 @@ check(compute_trend([]) == [], "empty input -> empty output")
 check(summary([])["rate_provisional"] is True, "empty summary is provisional")
 
 long = compute_trend(series([200.0 - 0.1 * i for i in range(30)]))
-check(long[-1].rate_provisional is False, "series longer than lookback is not provisional")
+check(long[-1].rate_provisional is False, "long series is not provisional")
 check(summary(long)["rate_provisional"] is False, "summary carries the flag")
 
 
@@ -156,13 +209,25 @@ check(
     f"vs {odd[-1].rate_lb_per_day:.4f}",
 )
 
-# A gap straddling the lookback instant interpolates rather than snapping.
-gapped = compute_trend(
-    [(1, T0, 205.0, None, None)]
-    + [(i + 2, T0 + timedelta(days=20 + i), 197.0 - 0.3 * i, None, None) for i in range(20)]
+# Gap tolerance end-to-end: a lone weigh-in after three weeks off still gets a
+# rate, by reaching back to the cluster before the gap.
+after_gap = compute_trend(
+    [(i + 1, T0 + timedelta(days=i), 200.0 - 0.3 * i, None, None) for i in range(5)]
+    + [(99, T0 + timedelta(days=26), 192.0, None, None)]
 )
-check(gapped[-1].rate_lb_per_day < 0, "gapped series still yields a sane direction")
-check(math.isfinite(gapped[-1].rate_lb_per_day), "gapped series stays finite")
+check(math.isfinite(after_gap[-1].rate_lb_per_day), "post-gap weigh-in still gets a rate")
+check(after_gap[-1].rate_lb_per_day < 0, "post-gap rate has the right sign")
+check(after_gap[-1].rate_window_days > RATE_WINDOW_DAYS, "window widened past the gap")
+
+# ...but a year off does not regress today against last year.
+stale = compute_trend(
+    [(i + 1, T0 + timedelta(days=i), 200.0 - 0.3 * i, None, None) for i in range(5)]
+    + [(99, T0 + timedelta(days=400), 192.0, None, None)]
+)
+check(
+    stale[-1].rate_window_days <= RATE_MAX_WINDOW_DAYS or stale[-1].rate_provisional,
+    "a long layoff is capped or flagged, never silently stale",
+)
 
 
 # --- coalesced duplicates inherit the anchor's rate ------------------------
@@ -175,6 +240,8 @@ anchor = [p for p in dup if p.id == 20][0]
 check(close(tail.rate_lb_per_day, anchor.rate_lb_per_day), "duplicate inherits rate")
 check(tail.rate_provisional == anchor.rate_provisional, "duplicate inherits the flag")
 check("rate_provisional" in dup[-1].to_dict(), "to_dict exposes the flag")
+check("rate_se_lb_per_day" in dup[-1].to_dict(), "to_dict exposes the error bar")
+check(close(tail.rate_se_lb_per_day, anchor.rate_se_lb_per_day), "duplicate inherits SE")
 
 
 print(f"{passed} passed, {failed} failed")
