@@ -117,7 +117,7 @@ def _energy_phrase(kcal_per_day: Optional[float]) -> str:
 
 
 def _confidence(series: list, summ: dict) -> tuple[str, list[str]]:
-    """How much to trust the slope given sample count and gaps."""
+    """How much to trust the fitted rate given sample count and gaps."""
     notes: list[str] = []
     count = int(summ.get("count") or 0)
     span = float(summ.get("span_days") or 0)
@@ -304,14 +304,26 @@ def build_context(
             f"(trend weight {_r(summ.get('trend'), 1)} lb; last scale "
             f"{_r(summ.get('latest_weight'), 1)} lb on {summ.get('latest_date')})."
         )
+        se_day = summ.get("rate_se_lb_per_day")
+        band = ""
+        if se_day:
+            half = 1.96 * float(se_day) * 7.0
+            band = (
+                f" 95% confidence {_r(rate_w - half, 2)} to {_r(rate_w + half, 2)} lb/week"
+                + (
+                    " — that band includes zero, so say it is too early to call."
+                    if (rate_w - half) * (rate_w + half) < 0
+                    else "."
+                )
+            )
         narrative.append(
-            f"Smoothed rate: {_r(rate_w, 2)} lb/week ({_rate_descriptor(rate_w)}). "
-            f"That is {_r(summ.get('rate_lb_per_day'), 3)} lb/day."
+            f"Fitted rate: {_r(rate_w, 2)} lb/week ({_rate_descriptor(rate_w)}). "
+            f"That is {_r(summ.get('rate_lb_per_day'), 3)} lb/day.{band}"
         )
         # Critical: kcal is DERIVED from rate — same signal
         narrative.append(
             f"Estimated energy balance from that SAME slope: {_energy_phrase(kcal)}. "
-            "Important: the kcal figure is computed from the weight trend "
+            "Important: the kcal figure is computed from the fitted rate "
             "(rate × 3500). It is NOT an independent measurement. "
             "Deficit and weight loss are the same story — never contrast them with "
             "'despite', 'even though', or 'still'."
@@ -512,8 +524,11 @@ def build_prompt(ctx: dict, style: str = "pep") -> str:
 You write coach copy for τrend, a personal weight-trend tracker app.
 
 How the app works (read carefully):
-- User logs scale weight (noisy). App fits a time-aware EMA trend.
-- Rate (lb/week) is the slope of that trend.
+- User logs scale weight (noisy). App fits a time-aware EMA trend for the chart.
+- Rate (lb/week) is a least-squares fit to the RAW weigh-ins over the last ~21
+  days — NOT the slope of the trend line. Do not describe it as such.
+- The rate has a stated 95% confidence band. When that band straddles zero the
+  honest reading is "too early to tell", not the point estimate.
 - kcal/day is rate_lb_per_day × 3500. So kcal and rate are ONE signal, not two.
 - Negative rate + negative kcal = losing weight / deficit. That is consistent and good if intended.
 - NEVER say "despite a deficit" or "even though you have a deficit" about weight loss. Deficit explains the loss.

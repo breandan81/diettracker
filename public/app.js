@@ -894,16 +894,32 @@
           : "not enough weigh-ins to estimate uncertainty";
     }
 
+    // kcal is rate x 3500 — one signal, not two — so it inherits the rate's
+    // uncertainty scaled by the same constant. Worth showing: the band is
+    // routinely hundreds of kcal, which is the difference between "eat less"
+    // and "you are already fine".
     const kcal = s.kcal_per_day;
     const kEl = $("#s-kcal");
+    const kSub = $("#s-kcal-sub");
     if (kcal == null) {
       kEl.textContent = "—";
       kEl.className = "stat-value";
+      kEl.title = "";
+      if (kSub) kSub.textContent = "kcal/day";
     } else {
       const label = kcal < -1 ? "deficit" : kcal > 1 ? "surplus" : "balanced";
+      const seK = s.rate_se_lb_per_day != null ? 1.96 * s.rate_se_lb_per_day * 3500 : null;
       kEl.textContent = `${kcal > 0 ? "+" : ""}${fmt(kcal, 0)}`;
       kEl.className = "stat-value " + signClass(kcal);
-      kEl.title = `${label} · est. from trend slope`;
+      kEl.title =
+        `${label} · from a least-squares fit to your weigh-ins` +
+        (s.rate_window_days != null ? ` over ${fmt(s.rate_window_days, 0)} days` : "") +
+        (seK != null
+          ? ` · 95% confidence ${fmt(kcal - seK, 0)} to ${fmt(kcal + seK, 0)}`
+          : "");
+      if (kSub) {
+        kSub.textContent = seK != null ? `kcal/day ±${fmt(seK, 0)}` : "kcal/day";
+      }
     }
 
     // BMI tile (from trend weight + height setting)
