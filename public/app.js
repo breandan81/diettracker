@@ -870,9 +870,12 @@
     const rateEl = $("#s-rate");
     rateEl.textContent = rWeek != null ? `${fmt(rWeek, 2)} lb/wk` : "—";
     rateEl.className = "stat-value " + signClass(rWeek);
+    // Flagged while the series is shorter than the rate lookback — the number
+    // is real but measured over a stub of a window, so say so rather than
+    // presenting it with the same confidence as a settled one.
     $("#s-rate-day").textContent =
       s.rate_lb_per_day != null
-        ? `${fmt(s.rate_lb_per_day, 3)} lb/day`
+        ? `${fmt(s.rate_lb_per_day, 3)} lb/day${s.rate_provisional ? " · provisional" : ""}`
         : "— lb/day";
 
     const kcal = s.kcal_per_day;

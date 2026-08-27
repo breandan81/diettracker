@@ -11,17 +11,33 @@ correctly.
 Body fat (when present) is smoothed with the same half-life.
 
     kcal/day ≈ rate_lb_per_day * 3500
+
+Rate is the trend line differenced over RATE_LOOKBACK_DAYS, interpolating
+the trend at the lookback instant since weigh-ins are irregular. The trend
+is already smoothed, so no second filter is applied to the slope — doing so
+only adds lag. When the series is shorter than the lookback the rate is
+measured over whatever span exists and flagged `rate_provisional`.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from bisect import bisect_right
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional, Sequence, Tuple, Union
 
 KCAL_PER_LB = 3500.0
 DEFAULT_HALF_LIFE_DAYS = 7.0
+
+# Rate = how far the trend line moved over the last RATE_LOOKBACK_DAYS.
+# Note this is NOT a 7-day measurement: each trend endpoint is itself a
+# backward-weighted average with a ~10-day time constant, so the estimate is
+# effectively centred ~14 days back. That is the price of the smoothing, and
+# it is why nothing further is applied on top.
+RATE_LOOKBACK_DAYS = 7.0
+# Below this the trend has barely moved and the quotient blows up.
+_MIN_RATE_SPAN_DAYS = 0.5
 
 DateTimeLike = Union[date, datetime, str]
 
@@ -92,6 +108,7 @@ class Point:
     rate_lb_per_day: Optional[float] = None
     rate_lb_per_week: Optional[float] = None
     kcal_per_day: Optional[float] = None
+    rate_provisional: bool = False
     gap_days: Optional[float] = None
     alpha: Optional[float] = None
 
@@ -112,9 +129,34 @@ class Point:
             "rate_lb_per_day": self.rate_lb_per_day,
             "rate_lb_per_week": self.rate_lb_per_week,
             "kcal_per_day": self.kcal_per_day,
+            "rate_provisional": self.rate_provisional,
             "gap_days": self.gap_days,
             "alpha": self.alpha,
         }
+
+
+def _trend_at(
+    times: Sequence[datetime], trends: Sequence[float], when: datetime
+) -> Optional[float]:
+    """Trend value at an arbitrary instant, linearly interpolated.
+
+    Weigh-ins are irregular, so the lookback instant rarely lands on one.
+    The trend is a continuous curve, so interpolating between the two
+    bracketing anchors is more faithful than snapping to the nearest.
+
+    Returns None when `when` predates the series — the caller then falls
+    back to the oldest anchor it has and flags the result provisional.
+    """
+    if not times or when < times[0]:
+        return None
+    i = bisect_right(times, when) - 1
+    if i >= len(times) - 1:
+        return trends[-1]
+    span = (times[i + 1] - times[i]).total_seconds()
+    if span <= 0:
+        return trends[i]
+    f = (when - times[i]).total_seconds() / span
+    return trends[i] + f * (trends[i + 1] - trends[i])
 
 
 def compute_trend(
@@ -168,8 +210,9 @@ def compute_trend(
     prev_trend: Optional[float] = None
     prev_bf_trend: Optional[float] = None
     prev_at: Optional[datetime] = None
-    prev_rate: Optional[float] = None
     ema: dict = {}  # anchor id -> filled Point fields
+    hist_times: List[datetime] = []  # anchor trend curve, for the rate lookback
+    hist_trends: List[float] = []
 
     for p in anchors:
         if prev_trend is None or prev_at is None:
@@ -180,6 +223,7 @@ def compute_trend(
             p.rate_lb_per_day = 0.0
             p.rate_lb_per_week = 0.0
             p.kcal_per_day = 0.0
+            p.rate_provisional = True  # one point is not a slope
         else:
             dt = days_between_dt(prev_at, p.logged_at)
             alpha, decay = time_alpha(dt, half_life_days)
@@ -196,26 +240,35 @@ def compute_trend(
             else:
                 p.body_fat_trend = prev_bf_trend
 
-            if dt > (1.0 / 1440.0):
-                inst_rate = (trend - prev_trend) / dt
-                r_alpha, r_decay = time_alpha(dt, half_life_days)
-                rate = (
-                    inst_rate
-                    if prev_rate is None
-                    else (r_alpha * inst_rate + r_decay * prev_rate)
-                )
+            # Slope of the already-smoothed trend over the lookback window.
+            target = p.logged_at - timedelta(days=RATE_LOOKBACK_DAYS)
+            base = _trend_at(hist_times, hist_trends, target)
+            if base is None:
+                # Series younger than the lookback: use everything there is.
+                base, base_at = hist_trends[0], hist_times[0]
+                provisional = True
             else:
-                rate = prev_rate if prev_rate is not None else 0.0
+                base_at = target
+                provisional = False
+
+            span = days_between_dt(base_at, p.logged_at)
+            if span >= _MIN_RATE_SPAN_DAYS:
+                rate = (trend - base) / span
+            else:
+                rate = 0.0
+                provisional = True
 
             p.rate_lb_per_day = rate
             p.rate_lb_per_week = rate * 7.0
             p.kcal_per_day = rate * KCAL_PER_LB
+            p.rate_provisional = provisional
 
         prev_trend = p.trend
         if p.body_fat_trend is not None:
             prev_bf_trend = p.body_fat_trend
         prev_at = p.logged_at
-        prev_rate = p.rate_lb_per_day
+        hist_times.append(p.logged_at)
+        hist_trends.append(p.trend)
         if p.id is not None:
             ema[p.id] = p
 
@@ -230,6 +283,7 @@ def compute_trend(
         p.rate_lb_per_day = src.rate_lb_per_day
         p.rate_lb_per_week = src.rate_lb_per_week
         p.kcal_per_day = src.kcal_per_day
+        p.rate_provisional = src.rate_provisional
         if src is p:
             continue  # already filled as anchor
         p.gap_days = 0.0
@@ -251,6 +305,7 @@ def summary(points: Sequence[Point]) -> dict:
             "rate_lb_per_day": None,
             "rate_lb_per_week": None,
             "kcal_per_day": None,
+            "rate_provisional": True,
             "half_life_days": None,
         }
     last = points[-1]
@@ -269,6 +324,7 @@ def summary(points: Sequence[Point]) -> dict:
         "rate_lb_per_day": last.rate_lb_per_day,
         "rate_lb_per_week": last.rate_lb_per_week,
         "kcal_per_day": last.kcal_per_day,
+        "rate_provisional": last.rate_provisional,
         "span_days": span_days,
         "net_trend_change": (
             (last.trend - first.trend)
