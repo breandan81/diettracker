@@ -124,12 +124,26 @@ static float kgToLb(float kg) {
   return kg * 2.2046226218f;
 }
 
+// A 27mm piezo disc resonates near 4kHz and falls off sharply either side, so
+// both pulses sit on the peak. Retune for a different diameter: bigger is
+// lower (35mm ~2.8kHz, 20mm ~6.5kHz).
+//
+// Two pulses at ONE pitch, not a two-tone chirp. Any interval wide enough to
+// hear as a pitch change drags a tone off resonance and costs real volume,
+// and at 4kHz a narrow interval is not distinguishable anyway. Rhythm carries
+// the "two-ness" instead, and both pulses stay at peak loudness.
+#define BEEP_HZ      4000
+#define BEEP_MS      90
+#define BEEP_GAP_MS  70   // <50ms reads as one blip — the disc rings through it
+
 static void beepPostSuccess() {
 #ifdef BUZZER_PIN
-  tone(BUZZER_PIN, 2000, 70);
-  delay(80);
-  tone(BUZZER_PIN, 3000, 90);
-  delay(100);
+  // tone() is non-blocking (it queues to a worker task), so each delay has to
+  // cover the pulse itself plus the silence we want after it.
+  tone(BUZZER_PIN, BEEP_HZ, BEEP_MS);
+  delay(BEEP_MS + BEEP_GAP_MS);
+  tone(BUZZER_PIN, BEEP_HZ, BEEP_MS);
+  delay(BEEP_MS + 10);
   noTone(BUZZER_PIN);
 #endif
 }
