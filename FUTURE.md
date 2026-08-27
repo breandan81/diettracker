@@ -40,3 +40,56 @@ Before any open internet deploy with photo upload → Grok: see **Safety note** 
 - Renpho cloud / app OAuth
 - Full multi-user on-scale profile dance
 - Calorie / food logging (separate future item)
+
+## Kalman filter for trend + rate
+
+**Status:** Considered and deferred 2026-08-27. Current implementation works and
+is tested; this is a cleaner end state, not a fix.
+
+Replace the EMA trend *and* the OLS rate window with one constant-velocity
+Kalman filter — state `[weight, velocity]`, covariance carried forward. Trend,
+rate, and the uncertainty on both fall out of a single recursion.
+
+### Why it is tempting
+
+Every gap heuristic in `trend.py` exists because the two estimators are bolted
+together. A KF gets them for free: `dt` goes into `F` and `Q`, so variance
+inflates across a gap on its own.
+
+    now:  half_life_days, RATE_WINDOW_DAYS, RATE_MIN_POINTS,
+          RATE_MAX_WINDOW_DAYS, _MIN_RATE_SPAN_DAYS      (5 constants)
+    KF:   q, R                                            (2, and R is
+                                                           estimable from data)
+
+Also more accurate at both ends — RMS error against a known rate, sigma 1.01,
+2000 runs:
+
+| day | KF | OLS-21 |
+|-----|--------|--------|
+| 3   | 0.373  | 0.711  |
+| 8   | 0.152  | 0.153  |
+| 21  | 0.038  | 0.037  |
+| 45  | 0.025  | 0.034  |
+
+Early it wins because the prior regularises a 3-point fit; late because OLS
+discards everything past 21 days.
+
+### What to design deliberately
+
+1. **Gap extrapolation — the real risk.** The KF carries velocity across a gap.
+   Simulated: lose 0.4/day for 20d, two weeks off *gaining* 0.3/day, and on the
+   first weigh-in back the KF's weight estimate was **4.25 lb low** (192.25 vs
+   196.50 actual) because it trusted the old velocity. An EMA cannot do this —
+   it holds and jumps. Choose `q` so variance genuinely inflates over a gap.
+2. **Step changes are slower.** A rectangular window forgets completely at
+   exactly 21 days; the KF forgets exponentially with a tail. On a rate change
+   OLS landed at day 21, the KF took ~30.
+3. **`q` is not a user-facing knob.** Settings exposes "EMA half-life (days)".
+   Reparameterise as something like "days for the rate to shift appreciably".
+4. **The chart changes.** A velocity-aware trend leads the EMA — better, but no
+   longer the Hacker's Diet curve the app is named for.
+
+A KF does not beat the noise/lag tradeoff, it navigates it optimally. The virtue
+is sitting on the efficient edge *and reporting where it is* — which is exactly
+what the trend-difference estimator failed to do when it read 31% of true while
+claiming to be settled.
