@@ -1454,8 +1454,8 @@
     }
   });
 
-  // Waist on its own: weight arrives from the scale on its own schedule, so a
-  // tape measurement should not have to be edited onto someone else's row.
+  // Waist on its own: it is measured on its own schedule, rarely the same one
+  // as weight, so it should not have to be edited onto someone else's row.
   $("#waist-form")?.addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const msg = $("#waist-msg");
