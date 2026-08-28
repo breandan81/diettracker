@@ -115,6 +115,9 @@
     if (!heightIn || !weightSeries.length) return [];
     const out = [];
     for (const e of weightSeries) {
+      // Waist-only entries are not weigh-ins; their carried trend would plot a
+      // duplicate BMI point on a day nobody stepped on the scale.
+      if (e.weight == null) continue;
       const lb = e.trend != null ? e.trend : e.weight;
       const bmi = bmiFromLbIn(lb, heightIn);
       if (bmi == null || !e.date) continue;

@@ -840,6 +840,86 @@
     if (marker) marker.style.left = cat.markerPct + "%";
   }
 
+  /**
+   * Waist verdict bar — waist-to-height, so it scales with the same height
+   * already stored for BMI and needs no sex table (see waist_axis.js).
+   *
+   * Waist is typed in by hand, so the newest weigh-in usually has none: the
+   * tile shows the smoothed value and says how long ago the tape came out,
+   * because a six-week-old measurement should not read like this morning's.
+   */
+  function renderWaist() {
+    const s = summary || {};
+    const valueEl = $("#s-waist");
+    const subEl = $("#s-waist-sub");
+    const bar = $("#waist-bar");
+    const marker = $("#waist-marker");
+    const rangeEl = $("#s-waist-range");
+    if (!valueEl) return;
+
+    const shown = s.waist_trend != null ? s.waist_trend : s.latest_waist;
+    if (shown == null) {
+      valueEl.textContent = "—";
+      valueEl.className = "stat-value";
+      subEl.textContent = "log one below when you measure";
+      if (bar) bar.hidden = true;
+      rangeEl.textContent = "";
+      return;
+    }
+
+    valueEl.textContent = `${fmt(shown, 1)} in`;
+    const age = daysAgo(s.latest_waist_at);
+    const last =
+      s.latest_waist != null ? `last ${fmt(s.latest_waist, 1)} in` : "trend";
+    subEl.textContent = age == null ? last : `${last} · ${age}`;
+
+    const cat =
+      typeof HdWaistAxis === "undefined"
+        ? null
+        : HdWaistAxis.waistCategory(shown, settings.height_in, settings.sex);
+
+    if (!cat) {
+      valueEl.className = "stat-value";
+      if (bar) bar.hidden = true;
+      // Only blame the profile when the profile is actually the problem: this
+      // branch is also where a failed waist_axis.js load lands, and telling
+      // someone to set a height they already set sends them the wrong way.
+      rangeEl.textContent = settings.height_in
+        ? ""
+        : "set height in settings for ranges";
+      return;
+    }
+
+    valueEl.className = "stat-value waist-" + cat.key;
+    if (bar) bar.hidden = false;
+    cat.bands.forEach((b) => {
+      const seg = $("#waist-seg-" + b.key);
+      if (seg) seg.title = b.title;
+    });
+    if (marker) marker.style.left = cat.markerPct + "%";
+    rangeEl.textContent =
+      `${cat.label} · WHtR ${cat.ratio.toFixed(2)} · keep under ` +
+      `${fmt(cat.healthyIn.high, 1)} in`;
+    rangeEl.title =
+      `Waist-to-height ratio: half your height (${fmt(cat.healthyIn.high, 1)} in) ` +
+      `is the healthy ceiling.` +
+      (cat.who
+        ? ` For comparison the WHO cutoff for ${cat.who.sexLabel}s is ` +
+          `${cat.who.increasedIn} in (raised) / ${cat.who.highIn} in (high).`
+        : "");
+  }
+
+  /** "today" / "3d ago" / "5w ago" for a sparse hand-entered reading. */
+  function daysAgo(iso) {
+    if (!iso) return null;
+    const t = new Date(iso).getTime();
+    if (!Number.isFinite(t)) return null;
+    const d = (Date.now() - t) / 86400000;
+    if (d < 1) return "today";
+    if (d < 14) return `${Math.round(d)}d ago`;
+    return `${Math.round(d / 7)}w ago`;
+  }
+
   function renderStats() {
     const s = summary || {};
     $("#s-trend").textContent =
@@ -865,6 +945,7 @@
       }
       renderBfBands(bf);
     }
+    renderWaist();
 
     const rWeek = s.rate_lb_per_week;
     const rateEl = $("#s-rate");
@@ -996,7 +1077,7 @@
   function renderTable() {
     const tbody = $("#hist tbody");
     if (!series.length) {
-      tbody.innerHTML = `<tr><td colspan="7" class="empty">No entries yet — log a weight above.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="8" class="empty">No entries yet — log a weight above.</td></tr>`;
       return;
     }
     // newest first
@@ -1017,6 +1098,14 @@
             : e.body_fat_trend != null
               ? "(" + fmt(e.body_fat_trend, 1) + ")"
               : "—";
+        // Parenthesised = carried forward from an earlier measurement, same
+        // convention the BF column already uses.
+        const waist =
+          e.waist != null
+            ? fmt(e.waist, 1)
+            : e.waist_trend != null
+              ? "(" + fmt(e.waist_trend, 1) + ")"
+              : "—";
         const kcal =
           e.kcal_per_day == null
             ? "—"
@@ -1025,8 +1114,9 @@
         return `<tr data-id="${e.id}">
           <td>${formatWhen(e)}</td>
           <td class="num">${fmt(e.weight, 1)}</td>
-          <td class="num">${fmt(e.trend, 2)}</td>
+          <td class="num">${e.weight == null ? "(" + fmt(e.trend, 2) + ")" : fmt(e.trend, 2)}</td>
           <td class="num">${bf}</td>
+          <td class="num">${waist}</td>
           <td class="num">${gap}</td>
           <td class="num ${kClass}">${kcal}</td>
           <td><button type="button" class="linkish edit-btn" data-id="${e.id}">edit</button></td>
@@ -1057,14 +1147,27 @@
 
     const data = filterSeriesByRange(series);
     const xOf = (e) => e.logged_at || e.date;
-    const raw = data.map((e) => ({ x: xOf(e), y: e.weight }));
-    const trend = data.map((e) => ({ x: xOf(e), y: e.trend }));
+    // Waist-only entries carry no weight, and their carried-forward trend would
+    // just duplicate the previous point — leave both series to the weigh-ins.
+    const weighed = data.filter((e) => e.weight != null);
+    const raw = weighed.map((e) => ({ x: xOf(e), y: e.weight }));
+    const trend = weighed
+      .filter((e) => e.trend != null)
+      .map((e) => ({ x: xOf(e), y: e.trend }));
     const bfRaw = data
       .filter((e) => e.body_fat != null)
       .map((e) => ({ x: xOf(e), y: e.body_fat }));
     const bfTrend = data
       .filter((e) => e.body_fat_trend != null)
       .map((e) => ({ x: xOf(e), y: e.body_fat_trend }));
+    // Only rows that actually carry a tape measurement. waist_trend is carried
+    // forward onto every weigh-in in between, which would draw a staircase
+    // rather than a trend.
+    const waistRows = data.filter((e) => e.waist != null);
+    const waistRaw = waistRows.map((e) => ({ x: xOf(e), y: e.waist }));
+    const waistTrend = waistRows
+      .filter((e) => e.waist_trend != null)
+      .map((e) => ({ x: xOf(e), y: e.waist_trend }));
 
     const goal = settings.goal_weight;
     const datasets = [
@@ -1121,6 +1224,36 @@
       });
     }
 
+    if (waistRaw.length) {
+      datasets.push({
+        label: "Waist",
+        data: waistRaw,
+        yAxisID: "yIn",
+        showLine: false,
+        pointRadius: 4,
+        pointHoverRadius: 6,
+        pointStyle: "rectRot",
+        backgroundColor: "rgba(167, 139, 250, 0.95)",
+        borderColor: "rgba(167, 139, 250, 0.95)",
+        order: 1,
+      });
+    }
+    // One measurement is a dot, not a trend — no line until there are two.
+    if (waistTrend.length > 1) {
+      datasets.push({
+        label: "Waist EMA",
+        data: waistTrend,
+        yAxisID: "yIn",
+        showLine: true,
+        pointRadius: 0,
+        borderWidth: 2,
+        borderColor: "rgba(167, 139, 250, 0.85)",
+        borderDash: [2, 3],
+        tension: 0.15,
+        order: 0,
+      });
+    }
+
     if (goal != null && goal !== "" && data.length) {
       datasets.push({
         label: "Goal weight",
@@ -1137,6 +1270,22 @@
         order: 4,
       });
     }
+
+    // Waist moves in tenths of an inch; without a floor on the span a flat
+    // fortnight would fill the whole axis and look like a collapse.
+    const showWaist = waistRaw.length > 0;
+    const waistAxis = (() => {
+      const vals = waistRaw.concat(waistTrend).map((p) => p.y);
+      if (!vals.length) return { min: 28, max: 44 };
+      let min = Math.floor(Math.min.apply(null, vals) - 1);
+      let max = Math.ceil(Math.max.apply(null, vals) + 1);
+      if (max - min < 6) {
+        const mid = (max + min) / 2;
+        min = Math.floor(mid - 3);
+        max = Math.ceil(mid + 3);
+      }
+      return { min: Math.max(0, min), max };
+    })();
 
     const showBf = bfRaw.length > 0 || bfTrend.length > 0;
     const bfSamples = bfRaw.concat(bfTrend).map((p) => p.y);
@@ -1155,12 +1304,15 @@
     if (chart) {
       chart.data.datasets = datasets;
       chart.options.scales.yBf.display = showBf;
+      chart.options.scales.yIn.display = showWaist;
       // The band is the default view, not a cage — leave a manual zoom alone.
       // Re-applying it here would also desync the plugin's saved "original"
       // bounds, so reset would no longer land where the user started.
       if (!chart.isZoomedOrPanned?.()) {
         chart.options.scales.yBf.min = bfAxis.min;
         chart.options.scales.yBf.max = bfAxis.max;
+        chart.options.scales.yIn.min = waistAxis.min;
+        chart.options.scales.yIn.max = waistAxis.max;
       }
       chart.update("none");
       chartZoomUi?.sync();
@@ -1190,6 +1342,9 @@
                 if (id === "yBf") {
                   return `${ctx.dataset.label}: ${Number(v).toFixed(1)}%`;
                 }
+                if (id === "yIn") {
+                  return `${ctx.dataset.label}: ${Number(v).toFixed(1)} in`;
+                }
                 return `${ctx.dataset.label}: ${Number(v).toFixed(2)} lb`;
               },
             },
@@ -1214,6 +1369,22 @@
               display: true,
               text: "Weight",
               color: "#5b9fd4",
+            },
+          },
+          yIn: {
+            position: "right",
+            display: showWaist,
+            min: waistAxis.min,
+            max: waistAxis.max,
+            grid: { drawOnChartArea: false },
+            ticks: {
+              color: "#a78bfa",
+              callback: (v) => v + '"',
+            },
+            title: {
+              display: true,
+              text: "Waist",
+              color: "#a78bfa",
             },
           },
           yBf: {
@@ -1249,10 +1420,12 @@
     const msg = $("#form-msg");
     msg.hidden = true;
     const bfRaw = $("#f-bf")?.value;
+    const waistRaw = $("#f-waist")?.value;
     const body = {
       logged_at: fromLocalInput($("#f-when").value),
       weight: parseFloat($("#f-weight").value),
       body_fat: bfRaw === "" || bfRaw == null ? null : parseFloat(bfRaw),
+      waist: waistRaw === "" || waistRaw == null ? null : parseFloat(waistRaw),
       note: $("#f-note").value || null,
     };
     try {
@@ -1263,6 +1436,7 @@
       applyState(data);
       $("#f-note").value = "";
       if ($("#f-bf")) $("#f-bf").value = "";
+      if ($("#f-waist")) $("#f-waist").value = "";
       msg.textContent = `Saved ${fmt(body.weight, 1)} lb`;
       msg.className = "hint ok";
       msg.hidden = false;
@@ -1273,6 +1447,36 @@
       if ($("#auto-pep")?.checked) {
         requestPepTalk({ celebrate: true }).catch(() => {});
       }
+    } catch (e) {
+      msg.textContent = e.message;
+      msg.className = "hint err";
+      msg.hidden = false;
+    }
+  });
+
+  // Waist on its own: weight arrives from the scale on its own schedule, so a
+  // tape measurement should not have to be edited onto someone else's row.
+  $("#waist-form")?.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const msg = $("#waist-msg");
+    msg.hidden = true;
+    const raw = $("#w-waist").value;
+    if (raw === "") return;
+    const body = {
+      logged_at: fromLocalInput($("#w-when").value),
+      waist: parseFloat(raw),
+    };
+    try {
+      const data = await api("/api/weights", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      applyState(data);
+      $("#w-waist").value = "";
+      $("#w-when").value = nowLocalInput();
+      msg.textContent = `Logged ${fmt(body.waist, 1)} in`;
+      msg.className = "hint ok";
+      msg.hidden = false;
     } catch (e) {
       msg.textContent = e.message;
       msg.className = "hint err";
@@ -1413,8 +1617,9 @@
     if (!entry) return;
     $("#e-id").value = entry.id;
     $("#e-when").value = toLocalInput(entry.logged_at || entry.date);
-    $("#e-weight").value = entry.weight;
+    $("#e-weight").value = entry.weight != null ? entry.weight : "";
     $("#e-bf").value = entry.body_fat != null ? entry.body_fat : "";
+    if ($("#e-waist")) $("#e-waist").value = entry.waist != null ? entry.waist : "";
     $("#e-note").value = entry.note || "";
     $("#edit-dialog").showModal();
   });
@@ -1425,10 +1630,13 @@
     ev.preventDefault();
     const id = parseInt($("#e-id").value, 10);
     const bfRaw = $("#e-bf").value;
+    const waistRaw = $("#e-waist")?.value ?? "";
+    const weightRaw = $("#e-weight").value;
     const body = {
       logged_at: fromLocalInput($("#e-when").value),
-      weight: parseFloat($("#e-weight").value),
+      weight: weightRaw === "" ? null : parseFloat(weightRaw),
       body_fat: bfRaw === "" ? null : parseFloat(bfRaw),
+      waist: waistRaw === "" ? null : parseFloat(waistRaw),
       note: $("#e-note").value || null,
     };
     try {
@@ -1511,12 +1719,16 @@
   });
 
   $("#export-csv").addEventListener("click", () => {
-    const header = "date,weight_lb,trend_lb,gap_days,alpha,rate_lb_per_day,kcal_per_day,note\n";
+    const header =
+      "date,weight_lb,trend_lb,body_fat_pct,waist_in,gap_days,alpha," +
+      "rate_lb_per_day,kcal_per_day,note\n";
     const lines = series.map((e) =>
       [
         e.date,
         e.weight,
         e.trend,
+        e.body_fat ?? "",
+        e.waist ?? "",
         e.gap_days,
         e.alpha,
         e.rate_lb_per_day,
@@ -1568,6 +1780,7 @@
 
   // init
   if ($("#f-when")) $("#f-when").value = nowLocalInput();
+  if ($("#w-when")) $("#w-when").value = nowLocalInput();
   Promise.all([loadAll(), loadCachedCoach(), refreshKoboldStatus()])
     .then(() => {
       if (aiCoach) renderCoach();

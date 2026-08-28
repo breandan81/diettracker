@@ -241,9 +241,19 @@ def build_context(
                 f", bf={_r(bf, 1)}%"
                 + (f", bf_trend={_r(bf_t, 1)}%" if bf_t is not None else "")
             )
+        waist = e.get("waist")
+        waist_bit = f", waist={_r(waist, 1)}in" if waist is not None else ""
+        if e.get("weight") is None:
+            # Tape-only entry. Spelled out rather than rendered as "scale=n/a",
+            # which the model would otherwise be tempted to quote as a number.
+            tape = f" — waist={_r(waist, 1)}in" if waist is not None else ""
+            recent_lines.append(
+                f"  {e.get('date')}: tape measurement only, no weigh-in{tape}"
+            )
+            continue
         recent_lines.append(
             f"  {e.get('date')}: scale={_r(e.get('weight'), 1)} lb, "
-            f"trend={_r(e.get('trend'), 2)} lb{bf_bit}, "
+            f"trend={_r(e.get('trend'), 2)} lb{bf_bit}{waist_bit}, "
             f"days_since_prev={_r(e.get('gap_days'), 0)}, "
             f"alpha={_r(e.get('alpha'), 2)}"
         )
@@ -378,6 +388,30 @@ def build_context(
     else:
         narrative.append("No scale body-fat readings yet.")
 
+    # Waist — hand-entered, so it is usually stale relative to the weigh-ins,
+    # and it moves independently of weight during a recomp. Worth its own line.
+    latest_waist = summ.get("latest_waist")
+    waist_trend = summ.get("waist_trend")
+    height_in = settings.get("height_in")
+    if latest_waist is not None or waist_trend is not None:
+        line = (
+            f"Waist: last {_r(latest_waist, 1)} in, "
+            f"EMA waist trend {_r(waist_trend, 1)} in."
+        )
+        try:
+            h = float(height_in) if height_in not in (None, "") else None
+        except (TypeError, ValueError):
+            h = None
+        ref = waist_trend if waist_trend is not None else latest_waist
+        if h and h > 0 and ref is not None:
+            line += (
+                f" Waist-to-height ratio {ref / h:.2f}"
+                f" (healthy is under 0.50, i.e. under {0.5 * h:.1f} in)."
+            )
+        narrative.append(line)
+    else:
+        narrative.append("No waist measurements logged yet.")
+
     if coach_goals:
         narrative.append(
             f"USER FOCUS (must reference in TITLE and/or MSG): {coach_goals}"
@@ -443,6 +477,8 @@ def build_context(
         "latest_weight": summ.get("latest_weight"),
         "latest_body_fat": latest_bf,
         "body_fat_trend": bf_trend,
+        "latest_waist": latest_waist,
+        "waist_trend": waist_trend,
         "trend": summ.get("trend"),
         "rate_lb_per_week": rate_w,
         "rate_lb_per_day": summ.get("rate_lb_per_day"),
@@ -460,8 +496,14 @@ def build_context(
         "recent": recent_lines,
         "photo_lines": photo_lines,
         "narrative": narrative,
-        "first_weight": series[0].get("weight") if series else None,
-        "first_date": series[0].get("date") if series else None,
+        # The first weigh-in, not the first entry: a tape measurement logged
+        # before any weigh-in has no starting weight to report.
+        "first_weight": next(
+            (e.get("weight") for e in series if e.get("weight") is not None), None
+        ),
+        "first_date": next(
+            (e.get("date") for e in series if e.get("weight") is not None), None
+        ),
     }
 
 
@@ -481,6 +523,8 @@ def build_prompt(ctx: dict, style: str = "pep") -> str:
         f"last_scale_lb={_r(ctx.get('latest_weight'), 1)}, "
         f"last_bf_pct={_r(ctx.get('latest_body_fat'), 1)}, "
         f"bf_trend_pct={_r(ctx.get('body_fat_trend'), 1)}, "
+        f"last_waist_in={_r(ctx.get('latest_waist'), 1)}, "
+        f"waist_trend_in={_r(ctx.get('waist_trend'), 1)}, "
         f"lb_per_week={_r(ctx.get('rate_lb_per_week'), 2)}, "
         f"kcal_per_day={_r(ctx.get('kcal_per_day'), 0)}, "
         f"goal_lb={_r(ctx.get('goal_weight'), 0)}, "

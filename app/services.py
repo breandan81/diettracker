@@ -151,7 +151,7 @@ def load_user_trend(db: Session, user_id: int, half_life: float | None = None):
     samples = []
     for r in rows:
         when = r.logged_at or (r.date + "T12:00:00+00:00")
-        samples.append((r.id, when, r.weight, r.note, r.body_fat))
+        samples.append((r.id, when, r.weight, r.note, r.body_fat, r.waist))
     points = compute_trend(samples, half_life_days=half_life)
     series = [p.to_dict() for p in points]
     summ = trend_summary(points)

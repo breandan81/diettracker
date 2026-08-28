@@ -164,10 +164,10 @@ main {
 }
 .stat-value.loss { color: var(--loss); }
 .stat-value.gain { color: var(--gain); }
-.stat-value.bmi-under, .stat-value.bf-underfat { color: var(--accent); }
-.stat-value.bmi-normal, .stat-value.bf-healthy { color: var(--loss); }
-.stat-value.bmi-over, .stat-value.bf-overfat { color: var(--warn); }
-.stat-value.bmi-obese, .stat-value.bf-obese { color: var(--danger); }
+.stat-value.bmi-under, .stat-value.bf-underfat, .stat-value.waist-low { color: var(--accent); }
+.stat-value.bmi-normal, .stat-value.bf-healthy, .stat-value.waist-healthy { color: var(--loss); }
+.stat-value.bmi-over, .stat-value.bf-overfat, .stat-value.waist-increased { color: var(--warn); }
+.stat-value.bmi-obese, .stat-value.bf-obese, .stat-value.waist-high { color: var(--danger); }
 .stat-sub {
   margin-top: 4px;
   font-size: 12px;
@@ -1289,4 +1289,15 @@ body.mood-gaining {
   0% { opacity: 0; transform: translate(-50%, 12px) scale(0.9); }
   15% { opacity: 1; transform: translate(-50%, 0) scale(1.05); }
   100% { opacity: 0; transform: translate(-50%, -40px) scale(1); }
+}
+
+/* Waist-only entry form — a quieter sibling of the weight log form. */
+.waist-form {
+  margin-top: 10px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+.waist-form-hint {
+  flex: 1 1 100%;
+  margin-top: 2px;
 }

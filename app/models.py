@@ -90,8 +90,12 @@ class Weight(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     date: Mapped[str] = mapped_column(String(32))  # YYYY-MM-DD
     logged_at: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    weight: Mapped[float] = mapped_column(Float)
+    # Nullable: a waist measurement is an entry in its own right. Nothing is
+    # invented to fill this in — see migrations.ensure_weight_nullable.
+    weight: Mapped[float | None] = mapped_column(Float, nullable=True)
     body_fat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Waist circumference in inches, typed in by hand — the scale cannot see it.
+    waist: Mapped[float | None] = mapped_column(Float, nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

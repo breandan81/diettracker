@@ -15,6 +15,7 @@ from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
 
 from coach import generate_pep, kobold_status
+from migrations import ensure_weight_nullable
 from photos import (
     create_photo,
     delete_photo,
@@ -95,6 +96,10 @@ def init_db(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE weights ADD COLUMN logged_at TEXT")
     if "body_fat" not in cols:
         conn.execute("ALTER TABLE weights ADD COLUMN body_fat REAL")
+    if "waist" not in cols:
+        conn.execute("ALTER TABLE weights ADD COLUMN waist REAL")
+    # Waist-only entries need weight to be nullable; SQLite needs a rebuild.
+    ensure_weight_nullable(conn)
     conn.execute(
         """
         UPDATE weights
@@ -166,6 +171,23 @@ def _float_or_none(v: Any) -> Optional[float]:
         return float(v)
     except (TypeError, ValueError):
         return None
+
+
+# Waist is inches. The 15in floor rejects a cm figure typed by mistake.
+WAIST_MIN_IN = 15.0
+WAIST_MAX_IN = 80.0
+
+
+def parse_waist(v) -> Optional[float]:
+    if v is None or v == "":
+        return None
+    try:
+        w = float(v)
+    except (TypeError, ValueError):
+        raise ValueError("waist must be a number (inches)")
+    if w < WAIST_MIN_IN or w > WAIST_MAX_IN:
+        raise ValueError(f"waist must be {WAIST_MIN_IN:.0f}-{WAIST_MAX_IN:.0f} inches")
+    return w
 
 
 def bmi_from_lb_in(weight_lb: float, height_in: float) -> dict:
@@ -282,7 +304,7 @@ def attach_bmi(summ: dict, settings: Optional[dict] = None) -> dict:
 def fetch_weights() -> list:
     rows = DB.execute(
         """
-        SELECT id, date, logged_at, weight, body_fat, note, created_at, updated_at
+        SELECT id, date, logged_at, weight, body_fat, waist, note, created_at, updated_at
         FROM weights
         ORDER BY COALESCE(logged_at, date), id ASC
         """
@@ -298,7 +320,7 @@ def load_trend(half_life: Optional[float] = None) -> tuple[list, dict, float]:
     for r in rows:
         when = r.get("logged_at") or r.get("date")
         samples.append(
-            (r["id"], when, r["weight"], r["note"], r.get("body_fat"))
+            (r["id"], when, r["weight"], r["note"], r.get("body_fat"), r.get("waist"))
         )
     points = compute_trend(samples, half_life_days=half_life)
     return [p.to_dict() for p in points], summary(points), half_life
@@ -517,14 +539,17 @@ class Handler(SimpleHTTPRequestHandler):
         return dt.date().isoformat(), dt.replace(microsecond=0).isoformat()
 
     def _create_weight(self, data: dict) -> None:
-        if "weight" not in data:
-            return self._err(400, "weight required")
-        try:
-            weight = float(data["weight"])
-        except (TypeError, ValueError):
-            return self._err(400, "weight must be a number")
-        if weight <= 0 or weight > 1000:
-            return self._err(400, "weight out of range")
+        # An entry may be a tape measurement with no weigh-in at all.
+        raw_w = data.get("weight")
+        if raw_w is None or raw_w == "":
+            weight = None
+        else:
+            try:
+                weight = float(raw_w)
+            except (TypeError, ValueError):
+                return self._err(400, "weight must be a number")
+            if weight <= 0 or weight > 1000:
+                return self._err(400, "weight out of range")
 
         try:
             d, logged_at = self._parse_logged_at(data)
@@ -540,6 +565,14 @@ class Handler(SimpleHTTPRequestHandler):
             if body_fat < 0 or body_fat > 80:
                 return self._err(400, "body_fat out of range")
 
+        try:
+            waist = parse_waist(data.get("waist"))
+        except ValueError as e:
+            return self._err(400, str(e))
+
+        if weight is None and waist is None:
+            return self._err(400, "need a weight or a waist")
+
         note = data.get("note")
         if note is not None:
             note = str(note).strip() or None
@@ -547,7 +580,7 @@ class Handler(SimpleHTTPRequestHandler):
         now = utc_now_iso()
 
         # Dedupe auto-scale spam: same renpho weight (+BF) within 2 minutes
-        if note == "renpho-ble":
+        if note == "renpho-ble" and weight is not None:
             row = DB.execute(
                 """
                 SELECT id, date, logged_at, weight, body_fat, note
@@ -587,10 +620,10 @@ class Handler(SimpleHTTPRequestHandler):
 
         cur = DB.execute(
             """
-            INSERT INTO weights(date, logged_at, weight, body_fat, note, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO weights(date, logged_at, weight, body_fat, waist, note, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (d, logged_at, weight, body_fat, note, now, now),
+            (d, logged_at, weight, body_fat, waist, note, now, now),
         )
         DB.commit()
         rid = cur.lastrowid
@@ -615,14 +648,18 @@ class Handler(SimpleHTTPRequestHandler):
         logged_at = row["logged_at"] or (d + "T12:00:00+00:00")
         note = row["note"]
         body_fat = row["body_fat"] if "body_fat" in row.keys() else None
+        waist = row["waist"] if "waist" in row.keys() else None
 
-        if "weight" in data and data["weight"] is not None:
-            try:
-                weight = float(data["weight"])
-            except (TypeError, ValueError):
-                return self._err(400, "weight must be a number")
-            if weight <= 0 or weight > 1000:
-                return self._err(400, "weight out of range")
+        if "weight" in data:
+            if data["weight"] is None or data["weight"] == "":
+                weight = None
+            else:
+                try:
+                    weight = float(data["weight"])
+                except (TypeError, ValueError):
+                    return self._err(400, "weight must be a number")
+                if weight <= 0 or weight > 1000:
+                    return self._err(400, "weight out of range")
 
         if data.get("logged_at") or data.get("timestamp") or data.get("date"):
             try:
@@ -639,6 +676,15 @@ class Handler(SimpleHTTPRequestHandler):
                 except (TypeError, ValueError):
                     return self._err(400, "body_fat must be a number")
 
+        if "waist" in data:
+            try:
+                waist = parse_waist(data["waist"])
+            except ValueError as e:
+                return self._err(400, str(e))
+
+        if weight is None and waist is None:
+            return self._err(400, "need a weight or a waist")
+
         if "note" in data:
             note = data["note"]
             if note is not None:
@@ -648,10 +694,10 @@ class Handler(SimpleHTTPRequestHandler):
         DB.execute(
             """
             UPDATE weights
-            SET date=?, logged_at=?, weight=?, body_fat=?, note=?, updated_at=?
+            SET date=?, logged_at=?, weight=?, body_fat=?, waist=?, note=?, updated_at=?
             WHERE id=?
             """,
-            (d, logged_at, weight, body_fat, note, now, wid),
+            (d, logged_at, weight, body_fat, waist, note, now, wid),
         )
         DB.commit()
         series, summ, half = load_trend()

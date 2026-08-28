@@ -8,7 +8,17 @@ correctly.
     alpha = 1 - decay
     trend_t = alpha * weight_t + decay * trend_{t-1}
 
-Body fat (when present) is smoothed with the same half-life.
+Body fat and waist (when present) are smoothed with the same half-life.
+An entry may carry a waist and no weight at all (the tape comes out on its
+own schedule, the scale logs itself daily). Those rows carry the weight trend
+forward untouched and take no part in the rate fit — nothing is invented to
+fill the gap.
+
+Waist keeps its own clock: it is typed in by hand every week or two, not
+measured at every weigh-in, so its alpha comes from the gap since the last
+*waist* reading, not the gap since the last weigh-in. Reusing the weight gap
+would feed a fortnight-old measurement through a one-day alpha and barely move
+the trend at all.
 
     kcal/day ≈ rate_lb_per_day * 3500
 
@@ -106,12 +116,15 @@ _COALESCE_WEIGHT_LB = 0.15
 class Point:
     id: Optional[int]
     logged_at: datetime
-    weight: float
+    # None for a waist-only entry.
+    weight: Optional[float]
     note: Optional[str] = None
     body_fat: Optional[float] = None
+    waist: Optional[float] = None
     # filled by compute_trend
     trend: Optional[float] = None
     body_fat_trend: Optional[float] = None
+    waist_trend: Optional[float] = None
     rate_lb_per_day: Optional[float] = None
     rate_lb_per_week: Optional[float] = None
     kcal_per_day: Optional[float] = None
@@ -133,8 +146,10 @@ class Point:
             "weight": self.weight,
             "note": self.note,
             "body_fat": self.body_fat,
+            "waist": self.waist,
             "trend": self.trend,
             "body_fat_trend": self.body_fat_trend,
+            "waist_trend": self.waist_trend,
             "rate_lb_per_day": self.rate_lb_per_day,
             "rate_lb_per_week": self.rate_lb_per_week,
             "kcal_per_day": self.kcal_per_day,
@@ -190,29 +205,35 @@ def _rate_window(times: Sequence[datetime], i: int) -> int:
     return j
 
 
+def _opt_float(v) -> Optional[float]:
+    """Blank strings and junk become None — these fields are optional."""
+    if v is None or v == "":
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def compute_trend(
     samples: Sequence[Tuple],
     half_life_days: float = DEFAULT_HALF_LIFE_DAYS,
 ) -> List[Point]:
     """Compute trend series.
 
-    Each sample: (id|None, datetime_like, weight, note?, body_fat?)
+    Each sample: (id|None, datetime_like, weight, note?, body_fat?, waist?)
     """
     pts: List[Point] = []
     for s in samples:
         sid = s[0]
         logged = parse_datetime(s[1])
-        w = float(s[2])
+        w = _opt_float(s[2])
         note = s[3] if len(s) > 3 else None
-        bf = s[4] if len(s) > 4 else None
-        if bf is not None and bf != "":
-            try:
-                bf = float(bf)
-            except (TypeError, ValueError):
-                bf = None
-        else:
-            bf = None
-        pts.append(Point(id=sid, logged_at=logged, weight=w, note=note, body_fat=bf))
+        bf = _opt_float(s[4] if len(s) > 4 else None)
+        waist = _opt_float(s[5] if len(s) > 5 else None)
+        pts.append(
+            Point(id=sid, logged_at=logged, weight=w, note=note, body_fat=bf, waist=waist)
+        )
 
     pts.sort(key=lambda p: (p.logged_at, p.id if p.id is not None else 0))
     if not pts:
@@ -226,10 +247,18 @@ def compute_trend(
         if anchors:
             prev = anchors[-1]
             dt = days_between_dt(prev.logged_at, p.logged_at)
-            same_w = abs(p.weight - prev.weight) <= _COALESCE_WEIGHT_LB
+            # Reconnect spam is a weigh-in phenomenon. A waist-only entry is
+            # always deliberate, so it never merges into a neighbour.
+            same_w = (
+                p.weight is not None
+                and prev.weight is not None
+                and abs(p.weight - prev.weight) <= _COALESCE_WEIGHT_LB
+            )
             if dt <= _COALESCE_WINDOW_DAYS and same_w:
                 if prev.body_fat is None and p.body_fat is not None:
                     prev.body_fat = p.body_fat
+                if prev.waist is None and p.waist is not None:
+                    prev.waist = p.waist
                 if p.id is not None:
                     sample_to_anchor[p.id] = prev
                 continue
@@ -241,10 +270,21 @@ def compute_trend(
     prev_trend: Optional[float] = None
     prev_bf_trend: Optional[float] = None
     prev_at: Optional[datetime] = None
+    # Waist runs on its own clock — see the module docstring.
+    prev_waist_trend: Optional[float] = None
+    prev_waist_at: Optional[datetime] = None
     ema: dict = {}  # anchor id -> filled Point fields
 
     for p in anchors:
-        if prev_trend is None or prev_at is None:
+        if p.weight is None:
+            # Waist-only entry. There is nothing to fold into the weight EMA,
+            # so the trend passes straight through: this row reports the
+            # current best estimate without pretending to be a weigh-in.
+            p.trend = prev_trend
+            p.body_fat_trend = prev_bf_trend
+            p.gap_days = None
+            p.alpha = None
+        elif prev_trend is None or prev_at is None:
             p.trend = p.weight
             p.body_fat_trend = p.body_fat
             p.gap_days = 0.0
@@ -271,22 +311,41 @@ def compute_trend(
 
             pass  # rate is fitted below, once every trend is known
 
-        prev_trend = p.trend
+        # Waist: same half-life, but alpha from the gap since the last waist
+        # reading. Rows without one carry the trend forward unchanged rather
+        # than decaying it toward nothing.
+        if p.waist is not None:
+            if prev_waist_trend is None or prev_waist_at is None:
+                p.waist_trend = p.waist
+            else:
+                dtw = days_between_dt(prev_waist_at, p.logged_at)
+                alpha_w, decay_w = time_alpha(dtw, half_life_days)
+                p.waist_trend = alpha_w * p.waist + decay_w * prev_waist_trend
+            prev_waist_trend = p.waist_trend
+            prev_waist_at = p.logged_at
+        else:
+            p.waist_trend = prev_waist_trend
+
+        if p.weight is not None:
+            prev_trend = p.trend
+            prev_at = p.logged_at
         if p.body_fat_trend is not None:
             prev_bf_trend = p.body_fat_trend
-        prev_at = p.logged_at
         if p.id is not None:
             ema[p.id] = p
 
     # Rate: least squares on the raw weigh-ins (see RATE_WINDOW_DAYS).
-    times = [a.logged_at for a in anchors]
+    # Waist-only entries are excluded outright — they carry no weight to fit,
+    # and letting them into the window would shrink it to fewer real points.
+    weighed = [a for a in anchors if a.weight is not None]
+    times = [a.logged_at for a in weighed]
 
-    for i, p in enumerate(anchors):
+    for i, p in enumerate(weighed):
         j = _rate_window(times, i)
         n = i - j + 1
         span = days_between_dt(times[j], times[i])
         if n >= 2 and span >= _MIN_RATE_SPAN_DAYS:
-            slope, se = _ols(times[j : i + 1], [a.weight for a in anchors[j : i + 1]])
+            slope, se = _ols(times[j : i + 1], [a.weight for a in weighed[j : i + 1]])
             p.rate_lb_per_day = slope
             p.rate_se_lb_per_day = se
             p.rate_provisional = n < RATE_MIN_POINTS
@@ -298,6 +357,23 @@ def compute_trend(
         p.kcal_per_day = p.rate_lb_per_day * KCAL_PER_LB
         p.rate_window_days = round(span, 4)
 
+    # A waist-only row shows the rate standing at that moment, so the tile does
+    # not blank out just because the newest entry came from a tape measure.
+    last_rate: Optional[Point] = None
+    for p in anchors:
+        if p.weight is not None:
+            last_rate = p
+            continue
+        if last_rate is None:
+            p.rate_provisional = True
+            continue
+        p.rate_lb_per_day = last_rate.rate_lb_per_day
+        p.rate_lb_per_week = last_rate.rate_lb_per_week
+        p.kcal_per_day = last_rate.kcal_per_day
+        p.rate_provisional = last_rate.rate_provisional
+        p.rate_se_lb_per_day = last_rate.rate_se_lb_per_day
+        p.rate_window_days = last_rate.rate_window_days
+
     # Copy EMA onto every sample (duplicates inherit their anchor's state)
     for p in pts:
         anchor = sample_to_anchor.get(p.id) if p.id is not None else None
@@ -306,6 +382,7 @@ def compute_trend(
         src = ema.get(anchor.id, anchor)
         p.trend = src.trend
         p.body_fat_trend = src.body_fat_trend
+        p.waist_trend = src.waist_trend
         p.rate_lb_per_day = src.rate_lb_per_day
         p.rate_lb_per_week = src.rate_lb_per_week
         p.kcal_per_day = src.kcal_per_day
@@ -324,12 +401,16 @@ def summary(points: Sequence[Point]) -> dict:
     if not points:
         return {
             "count": 0,
+            "entry_count": 0,
             "latest_date": None,
             "latest_logged_at": None,
             "latest_weight": None,
             "latest_body_fat": None,
+            "latest_waist": None,
+            "latest_waist_at": None,
             "trend": None,
             "body_fat_trend": None,
+            "waist_trend": None,
             "rate_lb_per_day": None,
             "rate_lb_per_week": None,
             "kcal_per_day": None,
@@ -339,28 +420,49 @@ def summary(points: Sequence[Point]) -> dict:
             "half_life_days": None,
         }
     last = points[-1]
-    first = points[0]
-    span_days = days_between_dt(first.logged_at, last.logged_at)
+    # "latest" means the latest weigh-in, not the latest row: a waist-only
+    # entry logged after this morning's weigh-in must not stamp its own
+    # timestamp onto the weight, nor blank the weight out.
+    weighed = [p for p in points if p.weight is not None]
+    weigh_ins = len(weighed)
+    # With nothing but waist entries there is no weigh-in to anchor to; fall
+    # back to the rows themselves so the dates are still reported, while the
+    # count below stays honest at zero.
+    ref = weighed or list(points)
+    last_w = ref[-1]
+    first = ref[0]
+    span_days = days_between_dt(first.logged_at, last_w.logged_at)
+    # Waist is typed in by hand, so the newest row usually has none. Report the
+    # most recent one that exists, with when it was taken — a six-week-old
+    # measurement should not read like today's.
+    waist_pt = next((p for p in reversed(points) if p.waist is not None), None)
     return {
-        "count": len(points),
+        # Weigh-ins, not rows: this is what every consumer means by "count"
+        # (confidence in the rate, "N logs" beside the last weight).
+        "count": weigh_ins,
+        "entry_count": len(points),
         "first_date": first.d.isoformat(),
         "first_logged_at": first.logged_at.isoformat(),
-        "latest_date": last.d.isoformat(),
-        "latest_logged_at": last.logged_at.isoformat(),
-        "latest_weight": last.weight,
-        "latest_body_fat": last.body_fat,
-        "trend": last.trend,
-        "body_fat_trend": last.body_fat_trend,
-        "rate_lb_per_day": last.rate_lb_per_day,
-        "rate_lb_per_week": last.rate_lb_per_week,
-        "kcal_per_day": last.kcal_per_day,
-        "rate_provisional": last.rate_provisional,
-        "rate_se_lb_per_day": last.rate_se_lb_per_day,
-        "rate_window_days": last.rate_window_days,
+        "latest_date": last_w.d.isoformat(),
+        "latest_logged_at": last_w.logged_at.isoformat(),
+        "latest_weight": last_w.weight,
+        "latest_body_fat": last_w.body_fat,
+        "latest_waist": waist_pt.waist if waist_pt else None,
+        "latest_waist_at": waist_pt.logged_at.isoformat() if waist_pt else None,
+        "trend": last_w.trend,
+        "body_fat_trend": last_w.body_fat_trend,
+        # Waist follows the last row, which is usually where the waist is.
+        "waist_trend": last.waist_trend,
+        "rate_lb_per_day": last_w.rate_lb_per_day,
+        "rate_lb_per_week": last_w.rate_lb_per_week,
+        "kcal_per_day": last_w.kcal_per_day,
+        "rate_provisional": last_w.rate_provisional,
+        "rate_se_lb_per_day": last_w.rate_se_lb_per_day,
+        "rate_window_days": last_w.rate_window_days,
         "span_days": span_days,
         "net_trend_change": (
-            (last.trend - first.trend)
-            if last.trend is not None and first.trend is not None
+            (last_w.trend - first.trend)
+            if last_w.trend is not None and first.trend is not None
             else None
         ),
     }

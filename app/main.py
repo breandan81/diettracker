@@ -189,6 +189,10 @@ if settings.public_dir.is_dir():
     def bf_axis_js():
         return FileResponse(settings.public_dir / "bf_axis.js", headers=_no_cache)
 
+    @app.get("/waist_axis.js")
+    def waist_axis_js():
+        return FileResponse(settings.public_dir / "waist_axis.js", headers=_no_cache)
+
     @app.get("/chart_zoom.js")
     def chart_zoom_js():
         return FileResponse(settings.public_dir / "chart_zoom.js", headers=_no_cache)

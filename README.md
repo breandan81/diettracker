@@ -76,7 +76,12 @@ SQLite DB: `data/weights.db` · photos: `data/photos/` (both under gitignored `d
 ### Tests
 
 ```bash
+python3 test/test_migrations.py                    # weights.weight NOT NULL -> nullable rebuild
+python3 test/test_static_routes.py                 # every asset index.html asks for is served
+python3 test/test_trend_rate.py                    # windowed OLS rate + error bar
+python3 test/test_trend_waist.py                   # waist EMA on its own clock
 node test/test_bf_axis.js                          # BF chart axis bands
+node test/test_waist_axis.js                       # waist-to-height verdict bands
 node test/test_chart_zoom.js                       # chart zoom gestures + reset button
 make -C esp32/renpho_to_diettracker test           # ScaleSession one-shot / cooldown
 ```

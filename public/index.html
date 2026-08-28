@@ -16,7 +16,7 @@
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js"></script>
-  <link rel="stylesheet" href="/style.css?v=36" />
+  <link rel="stylesheet" href="/style.css?v=38" />
 </head>
 <body class="mood-idle" id="body-mood">
   <div id="fx-layer" aria-hidden="true"></div>
@@ -156,6 +156,20 @@
         </div>
         <div class="stat-sub" id="s-bf-range"></div>
       </div>
+      <div class="stat" id="stat-waist">
+        <div class="stat-label">Waist</div>
+        <div class="stat-value" id="s-waist">—</div>
+        <div class="stat-sub" id="s-waist-sub">log one below when you measure</div>
+        <div class="range-bar" id="waist-bar" hidden>
+          <!-- Segment titles are filled in by app.js: the cutoffs scale with height. -->
+          <div class="range-seg under" id="waist-seg-low"></div>
+          <div class="range-seg normal" id="waist-seg-healthy"></div>
+          <div class="range-seg over" id="waist-seg-increased"></div>
+          <div class="range-seg obese" id="waist-seg-high"></div>
+          <div class="range-marker" id="waist-marker"></div>
+        </div>
+        <div class="stat-sub" id="s-waist-range"></div>
+      </div>
       <div class="stat" id="stat-bmi">
         <div class="stat-label">BMI</div>
         <div class="stat-value" id="s-bmi">—</div>
@@ -186,6 +200,10 @@
           <span>Body fat % <em class="muted">(opt)</em></span>
           <input type="number" id="f-bf" step="0.1" min="0" max="80" placeholder="—" />
         </label>
+        <label>
+          <span>Waist (in) <em class="muted">(opt)</em></span>
+          <input type="number" id="f-waist" step="0.1" min="15" max="80" placeholder="—" title="Around the navel, tape snug, at the end of a normal breath out." />
+        </label>
         <label class="grow">
           <span>Note <em class="muted">(optional)</em></span>
           <input type="text" id="f-note" maxlength="200" placeholder="after travel, morning, …" />
@@ -195,6 +213,22 @@
         </button>
       </form>
       <p class="hint" id="form-msg" hidden></p>
+
+      <form id="waist-form" class="log-form waist-form">
+        <label>
+          <span>When</span>
+          <input type="datetime-local" id="w-when" required />
+        </label>
+        <label>
+          <span>Waist (in)</span>
+          <input type="number" id="w-waist" step="0.1" min="15" max="80" placeholder="35.0" required
+                 title="Around the navel, tape snug, at the end of a normal breath out." />
+        </label>
+        <button type="submit" class="btn" id="waist-btn">Log waist only</button>
+        <span class="field-hint waist-form-hint">The scale logs your weight on its own — this
+          records a tape measurement as its own entry, no weigh-in needed.</span>
+      </form>
+      <p class="hint" id="waist-msg" hidden></p>
     </section>
 
     <section class="panel">
@@ -214,7 +248,7 @@
       <div class="chart-wrap">
         <canvas id="chart" height="120"></canvas>
       </div>
-      <p class="hint">Weight (left axis) and body fat % (right axis) when the scale sends BF. Lines are time-based EMAs. <span id="chart-bf-hint"></span> <span class="zoom-hint">Scroll to zoom, or scroll over an axis to zoom just that one. Drag to pan (two fingers on touch), shift-drag for a zoom box.</span></p>
+      <p class="hint">Weight (left axis), body fat % and waist (right axes) when there is data for them. Lines are time-based EMAs. <span id="chart-bf-hint"></span> <span class="zoom-hint">Scroll to zoom, or scroll over an axis to zoom just that one. Drag to pan (two fingers on touch), shift-drag for a zoom box.</span></p>
     </section>
 
     <section class="panel" id="panel-visual-ratings" hidden>
@@ -332,6 +366,7 @@
                 <th>Weight</th>
                 <th>Trend</th>
                 <th>BF%</th>
+                <th>Waist</th>
                 <th>Gap</th>
                 <th>kcal/d</th>
                 <th></th>
@@ -468,11 +503,15 @@
       </label>
       <label>
         <span>Weight (lb)</span>
-        <input type="number" id="e-weight" step="0.1" min="50" max="500" required />
+        <input type="number" id="e-weight" step="0.1" min="50" max="500" placeholder="— (waist-only entry)" />
       </label>
       <label>
         <span>Body fat %</span>
         <input type="number" id="e-bf" step="0.1" min="0" max="80" />
+      </label>
+      <label>
+        <span>Waist (in)</span>
+        <input type="number" id="e-waist" step="0.1" min="15" max="80" />
       </label>
       <label>
         <span>Note</span>
@@ -487,9 +526,10 @@
     </form>
   </dialog>
 
-  <script src="/bf_axis.js?v=40"></script>
-  <script src="/chart_zoom.js?v=40"></script>
-  <script src="/app.js?v=40"></script>
-  <script src="/photos-ui.js?v=40"></script>
+  <script src="/bf_axis.js?v=42"></script>
+  <script src="/waist_axis.js?v=42"></script>
+  <script src="/chart_zoom.js?v=42"></script>
+  <script src="/app.js?v=42"></script>
+  <script src="/photos-ui.js?v=42"></script>
 </body>
 </html>

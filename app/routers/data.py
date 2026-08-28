@@ -92,9 +92,30 @@ def settings_put(
     return {"settings": get_user_settings(db, user.id)}
 
 
+# Waist is inches. 15 rules out a cm value typed by mistake (a 90 cm waist
+# would otherwise post as a 90 inch one); 80 leaves headroom above any real
+# measurement.
+WAIST_MIN_IN = 15.0
+WAIST_MAX_IN = 80.0
+
+
+def _clean_waist(v) -> float | None:
+    if v is None or v == "":
+        return None
+    w = float(v)
+    if w < WAIST_MIN_IN or w > WAIST_MAX_IN:
+        raise HTTPException(
+            status_code=400,
+            detail=f"waist must be {WAIST_MIN_IN:.0f}-{WAIST_MAX_IN:.0f} inches",
+        )
+    return w
+
+
 class WeightBody(BaseModel):
-    weight: float
+    # Optional: an entry may be a tape measurement with no weigh-in at all.
+    weight: float | None = None
     body_fat: float | None = None
+    waist: float | None = None
     note: str | None = None
     logged_at: str | None = None
     date: str | None = None
@@ -108,6 +129,12 @@ def weights_create(
 ):
     from datetime import datetime, timezone
 
+    waist = _clean_waist(body.waist)
+    if body.weight is None and waist is None:
+        raise HTTPException(status_code=400, detail="need a weight or a waist")
+    if body.weight is not None and (body.weight <= 0 or body.weight > 1000):
+        raise HTTPException(status_code=400, detail="weight out of range")
+
     logged = body.logged_at
     if not logged:
         logged = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -118,6 +145,7 @@ def weights_create(
         logged_at=logged,
         weight=body.weight,
         body_fat=body.body_fat,
+        waist=waist,
         note=body.note,
     )
     db.add(row)
@@ -129,6 +157,7 @@ def weights_create(
 class WeightUpdateBody(BaseModel):
     weight: float | None = None
     body_fat: float | None = None
+    waist: float | None = None
     note: str | None = None
     logged_at: str | None = None
     date: str | None = None
@@ -146,14 +175,23 @@ def weights_update(
         raise HTTPException(status_code=404, detail="not found")
 
     data = body.model_dump(exclude_unset=True)
-    if "weight" in data and data["weight"] is not None:
-        w = float(data["weight"])
-        if w <= 0 or w > 1000:
-            raise HTTPException(status_code=400, detail="weight out of range")
-        row.weight = w
+    if "weight" in data:
+        if data["weight"] is None or data["weight"] == "":
+            row.weight = None
+        else:
+            w = float(data["weight"])
+            if w <= 0 or w > 1000:
+                raise HTTPException(status_code=400, detail="weight out of range")
+            row.weight = w
     if "body_fat" in data:
         bf = data["body_fat"]
         row.body_fat = float(bf) if bf is not None and bf != "" else None
+    if "waist" in data:
+        row.waist = _clean_waist(data["waist"])
+    if row.weight is None and row.waist is None:
+        # Clearing both leaves a row that measures nothing. Deleting is the
+        # explicit way to do that, and it is one button away.
+        raise HTTPException(status_code=400, detail="need a weight or a waist")
     if "note" in data:
         note = data["note"]
         row.note = (str(note)[:500] if note is not None else None) or None

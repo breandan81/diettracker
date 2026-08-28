@@ -74,6 +74,7 @@ def build_export_zip(db: Session, user: User, data_dir: Path) -> bytes:
             "logged_at": w.logged_at,
             "weight": w.weight,
             "body_fat": w.body_fat,
+            "waist": w.waist,
             "note": w.note,
         }
         for w in weights_rows
@@ -172,9 +173,14 @@ def _find_weight(
         )
     # Fallback composite key
     d = str(item.get("date") or "")[:10]
+    raw_w = item.get("weight")
+    if raw_w is None or raw_w == "":
+        # Waist-only entry: no weight to match on, so the timestamp above is
+        # the only identity it has. Without one, treat it as new.
+        return None
     try:
-        w = float(item["weight"])
-    except (KeyError, TypeError, ValueError):
+        w = float(raw_w)
+    except (TypeError, ValueError):
         return None
     note = item.get("note")
     bf = item.get("body_fat")
@@ -266,11 +272,15 @@ def import_export_zip(
         for item in data.get("weights") or []:
             if not isinstance(item, dict):
                 continue
-            try:
-                weight_val = float(item["weight"])
-            except (KeyError, TypeError, ValueError):
-                summary["errors"].append("weight row missing/invalid weight")
-                continue
+            raw_weight = item.get("weight")
+            if raw_weight is None or raw_weight == "":
+                weight_val = None  # waist-only entry
+            else:
+                try:
+                    weight_val = float(raw_weight)
+                except (TypeError, ValueError):
+                    summary["errors"].append("weight row has an invalid weight")
+                    continue
             logged = (item.get("logged_at") or "").strip() or None
             d = str(item.get("date") or (logged[:10] if logged else ""))[:10]
             if not d:
@@ -281,6 +291,11 @@ def import_export_zip(
                 bf_f = float(bf) if bf is not None and bf != "" else None
             except (TypeError, ValueError):
                 bf_f = None
+            waist = item.get("waist")
+            try:
+                waist_f = float(waist) if waist is not None and waist != "" else None
+            except (TypeError, ValueError):
+                waist_f = None
             note = item.get("note")
             if note is not None:
                 note = str(note)[:500] or None
@@ -293,6 +308,9 @@ def import_export_zip(
                     changed = True
                 if existing.body_fat != bf_f:
                     existing.body_fat = bf_f
+                    changed = True
+                if existing.waist != waist_f:
+                    existing.waist = waist_f
                     changed = True
                 if (existing.note or None) != note:
                     existing.note = note
@@ -315,6 +333,7 @@ def import_export_zip(
                         logged_at=logged,
                         weight=weight_val,
                         body_fat=bf_f,
+                        waist=waist_f,
                         note=note,
                     )
                 )
